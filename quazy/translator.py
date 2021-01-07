@@ -101,19 +101,29 @@ class Translator:
         return value
 
     @classmethod
-    def insert(cls, table: Type[DBTable], fields: List[Tuple[DBField, Any]]) -> str:
+    def insert(cls, table: Type[DBTable], fields: List[Tuple[DBField, Any]]) -> Tuple[str, List[any]]:
         sql_values: List[str] = []
         values: List = []
         idx = 1
         for field, value in fields:
-            if field.pk or value == DefaultValue:
+            if field.pk:
                 sql_values.append('DEFAULT')
+            elif value == DefaultValue:
+                if field.default is None:
+                    sql_values.append('DEFAULT')
+                else:
+                    sql_values.append(f'${idx}')
+                    idx += 1
+                    if not callable(field.default):
+                        values.append(field.default)
+                    else:
+                        values.append(field.default())
             else:
                 sql_values.append(f'${idx}')
                 idx += 1
                 values.append(cls.get_value(field, value))
 
         columns = ','.join(f'"{field.column}"' for field, _ in fields)
-        row = ','.join(f'{value!r}' for value in values)
-        res = f'INSERT INTO {cls.table_name(table)} ({columns}) VALUES ({row})'
-        return res
+        row = ','.join(sql_values)
+        res = f'INSERT INTO {cls.table_name(table)} ({columns}) VALUES ({row}) RETURNING "{table._pk_.column}"'
+        return res, values

@@ -41,7 +41,7 @@ class DBFactory:
         pool._async__init__()
         return DBFactory(pool)
 
-    def use(self, cls: Type):
+    def use(self, cls: Type[DBTable]):
         self._tables.append(cls)
         setattr(self, cls.__name__, cls)
         return cls
@@ -74,15 +74,18 @@ class DBFactory:
 
     @func_sync
     async def create(self):
+        all_tables = self._tables.copy()
+        for table in self._tables:
+            all_tables.extend(table._subtables_)
         async with self.get_connection() as conn:  #type: asyncpg.connection.Connection
             async with conn.transaction():
-                for table in self._tables:
+                for table in all_tables:
                     await conn.execute(self._trans.create_table(table))
                     for field in table.fields.values():
                         if field.indexed:
                             await conn.execute(self._trans.create_index(table, field))
 
-                for table in self._tables:
+                for table in all_tables:
                     for field in table.fields.values():
                         if field.ref:
                             await conn.execute(self._trans.add_reference(table, field))
@@ -90,10 +93,22 @@ class DBFactory:
     @func_sync
     async def insert(self, item: DBTable):
         fields: List[Tuple[DBField, Any]] = []
-        for field in item.fields:
-            fields.append((field, getattr(item, field.name, DefaultValue)))
+        for name, field in item.fields.items():
+            fields.append((field, getattr(item, name, DefaultValue)))
         async with self.get_connection() as conn:
-            conn.execute(self._trans.insert(item.__class__, fields))
+            sql, values = self._trans.insert(item.__class__, fields)
+            new_id = await conn.fetchval(sql, *values)
+            setattr(item, item._pk_.name, new_id)
+
+            for table in item._subtables_:
+                for row in getattr(item, table._subname_):
+                    setattr(row, item._table_, item)
+                    fields.clear()
+                    for name, field in table.fields.items():
+                        fields.append((field, getattr(row, name, DefaultValue)))
+                    sql, values = self._trans.insert(row.__class__, fields)
+                    new_sub_id = await conn.fetchval(sql, *values)
+                    setattr(row, table._pk_.name, new_sub_id)
 
 
 @dataclass
@@ -151,12 +166,14 @@ class MetaTable(type):
             chunks = qualname.split('.')
             base_cls_name = '.'.join(chunks[:-1])
             attrs['_owner_'] = base_cls_name
-            field_name = camel2snake(chunks[-1])
+            field_name = camel2snake(chunks[-1])+'s'
+            attrs['_subname_'] = field_name
             if field_name in attrs['fields']:
                 raise QuazySubclassError(f'Subclass name {qualname} repeats field name')
 
         if '_meta_' not in attrs:
             attrs['_meta_'] = False
+        attrs['_subtables_'] = []
         return super().__new__(cls, clsname, bases, attrs)
 
     @staticmethod
@@ -181,7 +198,6 @@ class MetaTable(type):
             fields['id'] = pk
             attrs['_pk_'] = pk
 
-        attrs.update(fields)
         attrs['fields'] = fields
 
     @staticmethod
@@ -204,11 +220,12 @@ class DBTable(metaclass=MetaTable):
     _extendable_: ClassVar[bool] = False
     _schema_: ClassVar[str] = None
     _types_resolved_: ClassVar[bool] = False
-    _owner_: ClassVar[typing.Union[str, DBTable]] = None
+    _owner_: ClassVar[typing.Union[str, typing.Type[DBTable]]] = None
+    _subtables_: ClassVar[typing.List[typing.Type[DBTable]]] = None
+    _subname_: ClassVar[str] = None
     _meta_: ClassVar[bool] = False
     _pk_: ClassVar[DBField] = None
     fields: ClassVar[typing.Dict[str, DBField]] = None
-    id: typing.Union[int, UUID]
 
     @classmethod
     def resolve_types(cls, globalns):
@@ -221,15 +238,23 @@ class DBTable(metaclass=MetaTable):
                 continue
             cls.resolve_type(t, cls.fields[name], globalns)
 
+        # eval sub classes
+        for name, t in cls.__dict__.items():
+            if not name.startswith('_') and inspect.isclass(t) and issubclass(t, DBTable):
+                cls._subtables_.append(t)
+                t.resolve_types(globalns)
+
         # eval owner
         if isinstance(cls._owner_, str):
             base_cls: DBTable = getattr(sys.modules[cls.__module__], cls._owner_)
             # field_name = camel2snake(cls.__name__)
-            field = DBField(column=base_cls._table_)
+            field = DBField()
+            field.set_name(base_cls._table_)
             field.type = base_cls
             field.ref = True
             field.required = True
             cls._owner_ = field
+            cls.fields[field.column] = field
 
         # resolve types for subclasses
         for name, value in vars(cls).items():
@@ -267,8 +292,11 @@ class DBTable(metaclass=MetaTable):
         raise QuazyFieldTypeError(f'Type {t} is not supported as field type')
 
     def __init__(self, **initial):
-        for k, v in initial:
+        self.id: Union[None, int, UUID] = None
+        for k, v in initial.items():
             if k not in self.fields:
                 raise QuazyFieldNameError(f'Wrong field name {k} in new instance of {self._table_}')
             # TODO: validate types
             setattr(self, k, v)
+        for cls in self._subtables_:
+            setattr(self, cls._subname_, set())

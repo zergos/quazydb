@@ -27,15 +27,15 @@ class City(NamedTable):
 
 
 class Unit(NamedTable):
-    weigth: float
+    weight: float
 
 
 class Item(NamedTable):
     base_unit: Unit
     description: Optional[str]
-    cities: Many[City]
+    # cities: Many[City]
 
-    class Units(DBTable):
+    class Unit(DBTable):
         unit: Unit
         cnt: int
 
@@ -45,15 +45,32 @@ class Sale(DBTable):
     number: str
     client: Client
 
-    class Rows(DBTable):
+    class Row(DBTable):
         item: Item
         unit: Unit
         qty: float
 
 
-db = DBFactory.postgres(database="quazy", user="quazy", password="quazy")
-db.use_module()
+if __name__ == '__main__':
+    db = DBFactory.postgres(database="quazy", user="quazy", password="quazy")
+    db.use_module()
 
-db.clear()
-db.create()
+    db.clear()
+    db.create()
 
+    krasnodar = City(name='Krasnodar')
+    db.insert(krasnodar)
+
+    qty = Unit(name='qty', weight=1)
+    db.insert(qty)
+    pack = Unit(name='pack', weight=10)
+    db.insert(pack)
+
+    buyer = Client(name='Andrey', city=krasnodar)
+    db.insert(buyer)
+
+    potato = Item(name='Potato', base_unit=qty)
+    potato.units.add(Item.Unit(unit=pack, cnt=10))
+    db.insert(potato)
+
+    print('Done')
