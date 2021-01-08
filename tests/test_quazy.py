@@ -71,6 +71,10 @@ if __name__ == '__main__':
 
     potato = Item(name='Potato', base_unit=qty)
     potato.units.add(Item.Unit(unit=pack, cnt=10))
+    potato.units.add(Item.Unit(unit=pack, cnt=20))
     db.insert(potato)
+
+    potato.name = 'New potato'
+    db.update(potato)
 
     print('Done')

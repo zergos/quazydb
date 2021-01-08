@@ -127,3 +127,30 @@ class Translator:
         row = ','.join(sql_values)
         res = f'INSERT INTO {cls.table_name(table)} ({columns}) VALUES ({row}) RETURNING "{table._pk_.column}"'
         return res, values
+
+    @classmethod
+    def clear(cls, table: Type[DBTable]) -> str:
+        return f'TRUNCATE {cls.table_name(table)}'
+
+    @classmethod
+    def delete_related(cls, table: Type[DBTable], column: str) -> str:
+        return f'DELETE FROM {cls.table_name(table)} WHERE "{column}" = $1'
+
+    @classmethod
+    def update(cls, table: Type[DBTable], fields: List[Tuple[DBField, Any]]) -> Tuple[str, List[any]]:
+        sql_values: List[str] = []
+        values: List = []
+        idx = 2
+        for field, value in fields:
+            sql_values.append(f'${idx}')
+            idx += 1
+            values.append(cls.get_value(field, value))
+
+        sets: List[str] = []
+        for field, sql_value in zip(fields, sql_values):
+            sets.append(f'"{field[0].column}" = {sql_value}')
+
+        sets_sql = ', '.join(sets)
+        res = f'UPDATE {table._table_} SET {sets_sql} WHERE "{table._pk_.column}" = $1'
+        return res, values
+

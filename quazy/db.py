@@ -110,6 +110,21 @@ class DBFactory:
                     new_sub_id = await conn.fetchval(sql, *values)
                     setattr(row, table._pk_.name, new_sub_id)
 
+    @func_sync
+    async def update(self, item: DBTable):
+        fields: List[Tuple[DBField, Any]] = []
+        for name in item._modified_fields_:
+            field = item.fields[name]
+            fields.append((field, getattr(item, name, DefaultValue)))
+        async with self.get_connection() as conn:
+            sql, values = self._trans.update(item.__class__, fields)
+            await conn.execute(sql, getattr(item, item._pk_.name), *values)
+
+            for table in item._subtables_:
+                sql = self._trans.delete_related(table, item._table_)
+                await conn.execute(sql, getattr(item, item._pk_.name))
+                for row in getattr(item, table._subname_):
+                    await self.insert(row)
 
 @dataclass
 class DBField:
@@ -292,6 +307,7 @@ class DBTable(metaclass=MetaTable):
         raise QuazyFieldTypeError(f'Type {t} is not supported as field type')
 
     def __init__(self, **initial):
+        self._modified_fields_: Set[str] = set()
         self.id: Union[None, int, UUID] = None
         for k, v in initial.items():
             if k not in self.fields:
@@ -300,3 +316,9 @@ class DBTable(metaclass=MetaTable):
             setattr(self, k, v)
         for cls in self._subtables_:
             setattr(self, cls._subname_, set())
+
+    def __setattr__(self, key, value):
+        if key in self.fields:
+            self._modified_fields_.add(key)
+        return super().__setattr__(key, value)
+
