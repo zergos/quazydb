@@ -101,7 +101,7 @@ class DBFactory:
             setattr(item, item._pk_.name, new_id)
 
             for table in item._subtables_:
-                for row in getattr(item, table._subname_):
+                for row in getattr(item, table._snake_name_):
                     setattr(row, item._table_, item)
                     fields.clear()
                     for name, field in table.fields.items():
@@ -123,14 +123,14 @@ class DBFactory:
             for table in item._subtables_:
                 sql = self._trans.delete_related(table, item._table_)
                 await conn.execute(sql, getattr(item, item._pk_.name))
-                for row in getattr(item, table._subname_):
+                for row in getattr(item, table._snake_name_):
                     await self.insert(row)
 
 @dataclass
 class DBField:
     name: str = data_field(default='', init=False)
     column: str = data_field(default='')
-    type: Type = data_field(default=None, init=False)
+    type: Union[Type[DBTable], Type[Any]] = data_field(default=None, init=False)
     pk: bool = data_field(default=False)
     cid: bool = data_field(default=False)
     ref: bool = data_field(default=False, init=False)
@@ -182,9 +182,11 @@ class MetaTable(type):
             base_cls_name = '.'.join(chunks[:-1])
             attrs['_owner_'] = base_cls_name
             field_name = camel2snake(chunks[-1])+'s'
-            attrs['_subname_'] = field_name
+            attrs['_snake_name_'] = field_name
             if field_name in attrs['fields']:
                 raise QuazySubclassError(f'Subclass name {qualname} repeats field name')
+        else:
+            attrs['_snake_name_'] = camel2snake(qualname)+'s'
 
         if '_meta_' not in attrs:
             attrs['_meta_'] = False
@@ -231,16 +233,17 @@ class MetaTable(type):
 
 
 class DBTable(metaclass=MetaTable):
-    _table_: ClassVar[str]
-    _extendable_: ClassVar[bool] = False
-    _schema_: ClassVar[str] = None
-    _types_resolved_: ClassVar[bool] = False
-    _owner_: ClassVar[typing.Union[str, typing.Type[DBTable]]] = None
-    _subtables_: ClassVar[typing.List[typing.Type[DBTable]]] = None
-    _subname_: ClassVar[str] = None
-    _meta_: ClassVar[bool] = False
-    _pk_: ClassVar[DBField] = None
-    fields: ClassVar[typing.Dict[str, DBField]] = None
+    _table_: ClassVar[str]                   # Database table name *
+    _snake_name_: ClassVar[str]              # "snake" style table name in plural
+    _extendable_: ClassVar[bool] = False     # support for extandables by props *
+    _schema_: ClassVar[str] = None           # Database schema name *
+    _types_resolved_: ClassVar[bool] = False # field types resolution status
+    _owner_: ClassVar[typing.Union[str, typing.Type[DBTable]]] = None # table owner of sub table
+    _subtables_: ClassVar[typing.List[typing.Type[DBTable]]] = None   # sub tables list
+    _meta_: ClassVar[bool] = False           # mark table as meta table (abstract) *
+    _pk_: ClassVar[DBField] = None           # reference to primary field
+    fields: ClassVar[typing.Dict[str, DBField]] = None # list of all fields
+    # * marked attributes are able to modify by descendants
 
     @classmethod
     def resolve_types(cls, globalns):
@@ -251,7 +254,17 @@ class DBTable(metaclass=MetaTable):
         for name, t in typing.get_type_hints(cls, globalns, globals()).items():
             if name not in cls.fields or cls.fields[name].type is not None:
                 continue
-            cls.resolve_type(t, cls.fields[name], globalns)
+            field: DBField = cls.fields[name]
+            cls.resolve_type(t, field, globalns)
+            if field.ref:
+                fname = field.reverse_name or cls._snake_name_
+                if fname in field.type.fields and field.type.fields[fname].type != cls:
+                    raise QuazyFieldNameError(f'Cannot create Many field in table {field.type.__name__} by name {fname}. Set different reverse_name.')
+                rev_field = DBField()
+                rev_field.set_name(fname)
+                rev_field.ref = True
+                rev_field.many_field = True
+                rev_field.type = cls
 
         # eval sub classes
         for name, t in cls.__dict__.items():
@@ -315,7 +328,7 @@ class DBTable(metaclass=MetaTable):
             # TODO: validate types
             setattr(self, k, v)
         for cls in self._subtables_:
-            setattr(self, cls._subname_, set())
+            setattr(self, cls._snake_name_, set())
 
     def __setattr__(self, key, value):
         if key in self.fields:

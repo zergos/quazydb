@@ -151,6 +151,6 @@ class Translator:
             sets.append(f'"{field[0].column}" = {sql_value}')
 
         sets_sql = ', '.join(sets)
-        res = f'UPDATE {table._table_} SET {sets_sql} WHERE "{table._pk_.column}" = $1'
+        res = f'UPDATE {cls.table_name(table)} SET {sets_sql} WHERE "{table._pk_.column}" = $1'
         return res, values
 
