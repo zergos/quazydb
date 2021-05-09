@@ -8,6 +8,7 @@ import typing
 if typing.TYPE_CHECKING:
     from typing import *
     from .db import DBTable, DBField
+    from .query import DBQuery, DBSQL, DBJoinKind
 
 
 class Translator:
@@ -76,7 +77,7 @@ class Translator:
         cols = ', '.join(
             f'"{field.column}" {cls.type_name(field)} {cls.column_options(field)}'
             for field in table.fields.values()
-            if field.type is not Many and not field.prop
+            if not field.many_field and not field.prop
         )
         res = f'CREATE TABLE {cls.table_name(table)} ({cols})'
         return res
@@ -106,6 +107,8 @@ class Translator:
         values: List = []
         idx = 1
         for field, value in fields:
+            if field.many_field:
+                continue
             if field.pk:
                 sql_values.append('DEFAULT')
             elif value == DefaultValue:
@@ -123,7 +126,7 @@ class Translator:
                 idx += 1
                 values.append(cls.get_value(field, value))
 
-        columns = ','.join(f'"{field.column}"' for field, _ in fields)
+        columns = ','.join(f'"{field.column}"' for field, _ in fields if not field.many_field)
         row = ','.join(sql_values)
         res = f'INSERT INTO {cls.table_name(table)} ({columns}) VALUES ({row}) RETURNING "{table._pk_.column}"'
         return res, values
@@ -141,16 +144,73 @@ class Translator:
         sql_values: List[str] = []
         values: List = []
         idx = 2
-        for field, value in fields:
+        filtered = [f for f in fields if not f[0].many_field and not f[0].pk]
+        for field, value in filtered:
             sql_values.append(f'${idx}')
             idx += 1
             values.append(cls.get_value(field, value))
 
         sets: List[str] = []
-        for field, sql_value in zip(fields, sql_values):
+        for field, sql_value in zip(filtered, sql_values):
             sets.append(f'"{field[0].column}" = {sql_value}')
 
         sets_sql = ', '.join(sets)
         res = f'UPDATE {cls.table_name(table)} SET {sets_sql} WHERE "{table._pk_.column}" = $1'
         return res, values
 
+    @classmethod
+    def sql_value(cls, value: Union[DBSQL, str]):
+        from .query import DBSQL
+        if isinstance(value, DBSQL):
+            return repr(value)
+        return value.replace("'", "''")
+
+    @classmethod
+    def select(cls, query: DBQuery):
+        from .query import DBJoinKind
+
+        sql = 'SELECT\n'
+        fields = []
+        for field, value in query.fields.items():
+            fields.append(f'{cls.sql_value(value)} AS "{field}"')
+        joins = []
+        for join_name, join in query.joins.items():
+            if join.kind == DBJoinKind.SOURCE:
+                op = 'FROM'
+            else:
+                op = f'{join.kind.value} JOIN'
+            joins.append(f'{op} {cls.table_name(join.source)} AS "{join_name}"' + (f'\n\tON {cls.sql_value(join.condition)}' if join.condition else ''))
+        filters = []
+        group_filters = []
+        for filter in query.filters:
+            if not filter.aggregated:
+                filters.append(cls.sql_value(filter))
+            else:
+                group_filters.append(cls.sql_value(filter))
+        for group_filter in query.group_filters:
+            group_filters.append(cls.sql_value(group_filter))
+        groups = []
+        for group in query.groups:
+            groups.append(cls.sql_value(group))
+        if not groups and query.has_aggregates:
+            for n, field in enumerate(query.fields.values()):
+                if not field.aggregated:
+                    groups.append(f'{n+1}')
+        orders = []
+        for order in query.sort_list:
+            orders.append(cls.sql_value(order))
+
+        if not fields:
+            raise QuazyTranslatorException('No fields selected')
+
+        sql += '\t' + ',\n\t'.join(fields) + '\n'
+        sql += '\n'.join(joins) + '\n'
+        if filters:
+            sql += 'WHERE\n\t' + '\n\tAND '.join(filters) + '\n'
+        if groups:
+            sql += 'GROUP BY\n\t' + '\n\t'.join(groups) + '\n'
+            if group_filters:
+                sql += 'HAVING\n\t' + '\n\tAND '.join(group_filters) + '\n'
+        if orders:
+            sql += 'ORDER BY\n\t' + '\n\t'.join(orders) + '\n'
+        return sql

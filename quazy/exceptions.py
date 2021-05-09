@@ -16,3 +16,7 @@ class QuazyFieldNameError(QuazyError):
 
 class QuazyTranslatorException(QuazyError):
     pass
+
+
+class QuazyNotSupported(QuazyError):
+    pass

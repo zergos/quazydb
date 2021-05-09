@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 import re
 import inspect
-from dataclasses import dataclass, field as data_field, InitVar
+from dataclasses import dataclass, field as data_field
 from . import syncpg
 from .syncpg import func_sync
 from .exceptions import *
@@ -16,6 +16,7 @@ from typing import ClassVar
 if typing.TYPE_CHECKING:
     from typing import *
     import asyncpg
+    from .query import DBQuery
 
 __all__ = ['DBFactory', 'DBField', 'DBTable', 'UX', 'Many']
 
@@ -47,6 +48,7 @@ class DBFactory:
         return cls
 
     def use_module(self, name: str = None, schema: str = None):
+        # TODO: Schema support
         if name:
             globalns = vars(sys.modules[name])
         else:
@@ -76,7 +78,7 @@ class DBFactory:
     async def create(self):
         all_tables = self._tables.copy()
         for table in self._tables:
-            all_tables.extend(table._subtables_)
+            all_tables.extend(table._subtables_.values())
         async with self.get_connection() as conn:  #type: asyncpg.connection.Connection
             async with conn.transaction():
                 for table in all_tables:
@@ -100,7 +102,7 @@ class DBFactory:
             new_id = await conn.fetchval(sql, *values)
             setattr(item, item._pk_.name, new_id)
 
-            for table in item._subtables_:
+            for table in item._subtables_.values():
                 for row in getattr(item, table._snake_name_):
                     setattr(row, item._table_, item)
                     fields.clear()
@@ -120,11 +122,18 @@ class DBFactory:
             sql, values = self._trans.update(item.__class__, fields)
             await conn.execute(sql, getattr(item, item._pk_.name), *values)
 
-            for table in item._subtables_:
+            for table in item._subtables_.values():
                 sql = self._trans.delete_related(table, item._table_)
                 await conn.execute(sql, getattr(item, item._pk_.name))
                 for row in getattr(item, table._snake_name_):
                     await self.insert(row)
+
+    @func_sync
+    async def select(self, query: DBQuery):
+        async with self.get_connection() as conn:
+            sql = self._trans.select(query)
+            return await conn.fetch(sql, *query.args)
+
 
 @dataclass
 class DBField:
@@ -190,7 +199,7 @@ class MetaTable(type):
 
         if '_meta_' not in attrs:
             attrs['_meta_'] = False
-        attrs['_subtables_'] = []
+        attrs['_subtables_'] = {}
         return super().__new__(cls, clsname, bases, attrs)
 
     @staticmethod
@@ -239,7 +248,7 @@ class DBTable(metaclass=MetaTable):
     _schema_: ClassVar[str] = None           # Database schema name *
     _types_resolved_: ClassVar[bool] = False # field types resolution status
     _owner_: ClassVar[typing.Union[str, typing.Type[DBTable]]] = None # table owner of sub table
-    _subtables_: ClassVar[typing.List[typing.Type[DBTable]]] = None   # sub tables list
+    _subtables_: ClassVar[typing.Dict[str, typing.Type[DBTable]]] = None   # sub tables list
     _meta_: ClassVar[bool] = False           # mark table as meta table (abstract) *
     _pk_: ClassVar[DBField] = None           # reference to primary field
     fields: ClassVar[typing.Dict[str, DBField]] = None # list of all fields
@@ -262,14 +271,21 @@ class DBTable(metaclass=MetaTable):
                     raise QuazyFieldNameError(f'Cannot create Many field in table {field.type.__name__} by name {fname}. Set different reverse_name.')
                 rev_field = DBField()
                 rev_field.set_name(fname)
-                rev_field.ref = True
                 rev_field.many_field = True
                 rev_field.type = cls
+                field.type.fields[fname] = rev_field
+                setattr(field.type, fname, set())
 
         # eval sub classes
         for name, t in cls.__dict__.items():
             if not name.startswith('_') and inspect.isclass(t) and issubclass(t, DBTable):
-                cls._subtables_.append(t)
+                cls._subtables_[t._snake_name_] = t
+                field = DBField()
+                field.set_name(t._snake_name_)
+                field.many_field = True
+                field.type = t
+                field.reverse_name = cls._table_
+                cls.fields[field.column] = field
                 t.resolve_types(globalns)
 
         # eval owner
@@ -327,11 +343,10 @@ class DBTable(metaclass=MetaTable):
                 raise QuazyFieldNameError(f'Wrong field name {k} in new instance of {self._table_}')
             # TODO: validate types
             setattr(self, k, v)
-        for cls in self._subtables_:
+        for cls in self._subtables_.values():
             setattr(self, cls._snake_name_, set())
 
     def __setattr__(self, key, value):
         if key in self.fields:
             self._modified_fields_.add(key)
         return super().__setattr__(key, value)
-

@@ -81,15 +81,18 @@ if __name__ == '__main__':
 
     day1 = datetime.now() - timedelta(days=30)
     for i in range(10):
-        sell = Sale(date=day1, number=i, client=buyer)
+        sell = Sale(date=day1, number=str(i), client=buyer)
         for k in range(3):
-            sell.rows.append(Sale.Row(item=potato, unit=pack, qty=randint(10,100)))
+            sell.rows.add(Sale.Row(item=potato, unit=pack, qty=randint(10,100)))
         day1 += timedelta(days=1)
+        db.insert(sell)
 
     with DBQuery(db) as (q, s):
-        q.select(s.sales.date)
-        q.select(q.sum(s.sales.rows.qty))
-        q.sort_by(-1)
-    q.print_all()
+        q.select(data=s.sales.date, date_sum=q.sum(s.sales.rows.qty * s.sales.rows.unit.weight))
+        q.sort_by(2)
+        q.filter(s.sales.date >= day1 - timedelta(days=5))
+        q.filter(q.fields['date_sum'] > 80)
+    res = db.select(q)
+    print(res)
 
     print('Done')
