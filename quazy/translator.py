@@ -213,4 +213,6 @@ class Translator:
                 sql += 'HAVING\n\t' + '\n\tAND '.join(group_filters) + '\n'
         if orders:
             sql += 'ORDER BY\n\t' + '\n\t'.join(orders) + '\n'
+
+        sql = sql % dict((key, f'${index+1}') for index, key in enumerate(query.args.keys()))
         return sql

@@ -21,6 +21,7 @@ def func_sync(func: typing.Callable) -> typing.Callable:
             return func(*args, **kwargs)
         else:
             return loop.run_until_complete(func(*args, **kwargs))
+    wrapper._async = func
     return wrapper
 
 
@@ -34,6 +35,7 @@ def class_sync(cls: typing.ClassVar) -> typing.ClassVar:
             elif name == '__await__':
                 setattr(cls, 'get_object', func_sync(func))
             setattr(cls, name, func_sync(func))
+            setattr(cls, name+"_async", func)
     return cls
 
 

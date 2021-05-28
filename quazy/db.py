@@ -61,8 +61,15 @@ class DBFactory:
         for table in tables:
             table.resolve_types(globalns)
 
+    def query(self) -> DBQuery:
+        from .query import DBQuery
+        return DBQuery(self)
+
     def get_connection(self) -> asyncpg.connection.Connection:
         return self._connection_pool.acquire()
+
+    async def release_connection(self, conn: asyncpg.connection.Connection):
+        await self._connection_pool.release(conn)
 
     @func_sync
     async def clear(self):
@@ -130,10 +137,12 @@ class DBFactory:
 
     @func_sync
     async def select(self, query: DBQuery):
-        async with self.get_connection() as conn:
-            sql = self._trans.select(query)
-            return await conn.fetch(sql, *query.args)
-
+        if not query.prepared_statement:
+            async with self.get_connection() as conn:
+                sql = self._trans.select(query)
+                return await conn.fetch(sql, *query.args.values())
+        else:
+            return await query.prepared_statement.fetch(*query.args.values())
 
 @dataclass
 class DBField:

@@ -4,8 +4,10 @@ import typing
 from decimal import Decimal
 from random import randint
 from datetime import datetime, timedelta
+from types import SimpleNamespace
+
 from quazy.db import DBFactory, DBTable, Many
-from quazy.query import DBQuery
+from quazy.query import DBQuery, DBQueryField
 
 from typing import Optional
 if typing.TYPE_CHECKING:
@@ -87,12 +89,14 @@ if __name__ == '__main__':
         day1 += timedelta(days=1)
         db.insert(sell)
 
-    with DBQuery(db) as (q, s):
+    with db.query() as (q, s):  # type: DBQuery, SimpleNamespace
+        q.reuse()
         q.select(data=s.sales.date, date_sum=q.sum(s.sales.rows.qty * s.sales.rows.unit.weight))
         q.sort_by(2)
         q.filter(s.sales.date >= day1 - timedelta(days=5))
         q.filter(q.fields['date_sum'] > 80)
-    res = db.select(q)
+    with q.prepare():
+        res = db.select(q)
     print(res)
 
     print('Done')

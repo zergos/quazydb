@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import contextmanager, asynccontextmanager
 from dataclasses import dataclass, field as data_field
 from datetime import timedelta
 import typing
+from inspect import currentframe
 from types import SimpleNamespace
 from collections import OrderedDict
 from enum import Enum
+
 from quazy.db import DBFactory, DBField, DBTable, Many
 from quazy.exceptions import *
 
 if typing.TYPE_CHECKING:
     from typing import *
+    from asyncpg.prepared_stmt import PreparedStatement
 
 
 class DBQueryField:
@@ -215,6 +220,11 @@ class DBJoin:
 
 
 class DBQuery:
+    queries: Dict[Hashable, DBQuery] = {}
+
+    class SaveException(Exception):
+        pass
+
     def __init__(self, db: DBFactory):
         self.db: DBFactory = db
         self.fields: OrderedDict[str, DBSQL] = OrderedDict()
@@ -224,16 +234,53 @@ class DBQuery:
         self.groups: List[DBSQL] = []
         self.group_filters: List[DBSQL] = []
         self.has_aggregates: bool = False
-        self.args: List[Any] = []
+        self.args: OrderedDict[str, Any] = OrderedDict()
+        self._arg_counter = 0
+        self.prepared_statement: Optional[PreparedStatement] = None
+        self._hash: Optional[Hashable] = None
 
-    def __enter__(self) -> Tuple[DBQuery, SimpleNamespace]:
+    def __enter__(self) -> [DBQuery, SimpleNamespace]:
         scheme = SimpleNamespace()
         for table in self.db._tables:
             setattr(scheme, table._snake_name_, DBQueryField(self, table))
         return self, scheme
 
+    def reuse(self):
+        cf = currentframe()
+        line_no = cf.f_back.f_lineno
+        h = hash((__name__, line_no))
+        if h in DBQuery.queries:
+            raise DBQuery.SaveException
+        self._hash = h
+
     def __exit__(self, exc_type, exc_val, exc_tb):
-        pass
+        if exc_type and issubclass(exc_type, DBQuery.SaveException):
+            return True
+        if self._hash:
+            DBQuery.queries[self._hash] = self
+
+    @asynccontextmanager
+    async def prepare_async(self):
+        async with self.db.get_connection() as conn:
+            sql = self.db._trans.select(self)
+            self.prepared_statement = await conn.prepare(sql)
+            yield
+            self.prepared_statement = None
+
+    @contextmanager
+    def prepare(self):
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+        conn = loop.run_until_complete(self.db.get_connection())
+        try:
+            sql = self.db._trans.select(self)
+            self.prepared_statement = loop.run_until_complete(conn.prepare_async(sql))
+            yield
+        finally:
+            self.prepared_statement = None
+            loop.run_until_complete(self.db.release_connection(conn))
 
     def arg(self, value: Any, aggregated: bool = False) -> DBSQL:
         if isinstance(value, DBSQL):
@@ -242,10 +289,17 @@ class DBQuery:
             return DBSQL(self, value)
         if value is None:
             return DBSQL(self, 'NULL')
-        if value in self.args:
-            return DBSQL(self, f'${self.args.index(value)+1}', aggregated)
-        self.args.append(value)
-        return DBSQL(self, f'${len(self.args)}', aggregated)
+        if value in self.args.values():
+            key = list(self.args.keys())[list(self.args.values()).index(value)]
+            return DBSQL(self, f'%({key})s', aggregated)
+        self._arg_counter += 1
+        key = f'_arg_{self._arg_counter}'
+        self.args[key] = value
+        return DBSQL(self, f'%({key})s', aggregated)
+
+    def var(self, key: str, value: Optional[Any] = None) -> DBSQL:
+        self.args[key] = value
+        return DBSQL(self, f'%({key})')
 
     def select(self, **fields):
         for field_name, field_value in fields.items():
