@@ -239,11 +239,12 @@ class DBQuery:
         self.prepared_statement: Optional[PreparedStatement] = None
         self._hash: Optional[Hashable] = None
 
-    def __enter__(self) -> [DBQuery, SimpleNamespace]:
-        scheme = SimpleNamespace()
+        self.scheme: SimpleNamespace = SimpleNamespace()
         for table in self.db._tables:
-            setattr(scheme, table._snake_name_, DBQueryField(self, table))
-        return self, scheme
+            setattr(self.scheme, table._snake_name_, DBQueryField(self, table))
+
+    def __enter__(self) -> DBQuery:
+        return self
 
     def reuse(self):
         cf = currentframe()
@@ -320,7 +321,7 @@ class DBQuery:
             self.groups.append(DBSQL(self, field))
 
     def __getitem__(self, item: str):
-        return DBSQL(self, item)
+        return getattr(self.scheme, item)
 
     def sum(self, expr: DBSQL):
         self.has_aggregates = True

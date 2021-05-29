@@ -89,8 +89,9 @@ if __name__ == '__main__':
         day1 += timedelta(days=1)
         db.insert(sell)
 
-    with db.query() as (q, s):  # type: DBQuery, SimpleNamespace
+    with db.query() as q:
         q.reuse()
+        s = q.scheme
         q.select(data=s.sales.date, date_sum=q.sum(s.sales.rows.qty * s.sales.rows.unit.weight))
         q.sort_by(2)
         q.filter(s.sales.date >= day1 - timedelta(days=5))
