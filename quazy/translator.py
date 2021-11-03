@@ -102,9 +102,9 @@ class Translator:
         return value
 
     @classmethod
-    def insert(cls, table: Type[DBTable], fields: List[Tuple[DBField, Any]]) -> Tuple[str, List[any]]:
+    def insert(cls, table: Type[DBTable], fields: List[Tuple[DBField, Any]]) -> Tuple[str, Dict[str, any]]:
         sql_values: List[str] = []
-        values: List = []
+        values: Dict[str, Any] = {}
         idx = 1
         for field, value in fields:
             if field.many_field:
@@ -115,16 +115,16 @@ class Translator:
                 if field.default is None:
                     sql_values.append('DEFAULT')
                 else:
-                    sql_values.append(f'${idx}')
-                    idx += 1
+                    sql_values.append(f'%(v{idx})s')
                     if not callable(field.default):
-                        values.append(field.default)
+                        values[f'v{idx}'] = field.default
                     else:
-                        values.append(field.default())
+                        values[f'v{idx}'] = field.default()
+                    idx += 1
             else:
-                sql_values.append(f'${idx}')
+                sql_values.append(f'%(v{idx})s')
+                values[f'v{idx}'] = cls.get_value(field, value)
                 idx += 1
-                values.append(cls.get_value(field, value))
 
         columns = ','.join(f'"{field.column}"' for field, _ in fields if not field.many_field)
         row = ','.join(sql_values)
@@ -137,25 +137,25 @@ class Translator:
 
     @classmethod
     def delete_related(cls, table: Type[DBTable], column: str) -> str:
-        return f'DELETE FROM {cls.table_name(table)} WHERE "{column}" = $1'
+        return f'DELETE FROM {cls.table_name(table)} WHERE "{column}" = %s'
 
     @classmethod
-    def update(cls, table: Type[DBTable], fields: List[Tuple[DBField, Any]]) -> Tuple[str, List[any]]:
+    def update(cls, table: Type[DBTable], fields: List[Tuple[DBField, Any]]) -> Tuple[str, Dict[str, any]]:
         sql_values: List[str] = []
-        values: List = []
+        values: Dict[str, Any] = {}
         idx = 2
         filtered = [f for f in fields if not f[0].many_field and not f[0].pk]
         for field, value in filtered:
-            sql_values.append(f'${idx}')
+            sql_values.append(f'%(v{idx})s')
+            values[f'v{idx}'] = cls.get_value(field, value)
             idx += 1
-            values.append(cls.get_value(field, value))
 
         sets: List[str] = []
         for field, sql_value in zip(filtered, sql_values):
             sets.append(f'"{field[0].column}" = {sql_value}')
 
         sets_sql = ', '.join(sets)
-        res = f'UPDATE {cls.table_name(table)} SET {sets_sql} WHERE "{table._pk_.column}" = $1'
+        res = f'UPDATE {cls.table_name(table)} SET {sets_sql} WHERE "{table._pk_.column}" = %(v1)s'
         return res, values
 
     @classmethod
@@ -214,5 +214,5 @@ class Translator:
         if orders:
             sql += 'ORDER BY\n\t' + '\n\t'.join(orders) + '\n'
 
-        sql = sql % dict((key, f'${index+1}') for index, key in enumerate(query.args.keys()))
+        # sql = sql % dict((key, f'%({key})s') for key in query.args.keys())
         return sql

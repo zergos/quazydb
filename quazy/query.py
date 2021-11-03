@@ -260,6 +260,10 @@ class DBQuery:
         if self._hash:
             DBQuery.queries[self._hash] = self
 
+    @contextmanager
+    def get_scheme(self) -> SimpleNamespace:
+        yield self.scheme
+
     @asynccontextmanager
     async def prepare_async(self):
         async with self.db.get_connection() as conn:

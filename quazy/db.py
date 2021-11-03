@@ -4,8 +4,10 @@ import sys
 import re
 import inspect
 from dataclasses import dataclass, field as data_field
-from . import syncpg
-from .syncpg import func_sync
+
+import psycopg
+import psycopg_pool
+
 from .exceptions import *
 
 from .db_types import *
@@ -33,13 +35,13 @@ class DBFactory:
     _trans = Translator
 
     def __init__(self, connection_pool):
-        self._connection_pool = connection_pool
+        self._connection_pool: psycopg_pool.ConnectionPool = connection_pool
         self._tables: List[Type[DBTable]] = []
 
     @staticmethod
     def postgres(*args, **kwargs) -> DBFactory:
-        pool = syncpg.create_pool(*args, **kwargs)
-        pool._async__init__()
+        pool = psycopg_pool.ConnectionPool(*args, **kwargs)
+        pool.wait()
         return DBFactory(pool)
 
     def use(self, cls: Type[DBTable]):
@@ -65,48 +67,46 @@ class DBFactory:
         from .query import DBQuery
         return DBQuery(self)
 
-    def get_connection(self) -> asyncpg.connection.Connection:
-        return self._connection_pool.acquire()
+    def get_connection(self) -> psycopg.Connection:
+        return self._connection_pool.getconn()
 
-    async def release_connection(self, conn: asyncpg.connection.Connection):
-        await self._connection_pool.release(conn)
+    def release_connection(self, conn: psycopg.Connection):
+        self._connection_pool.putconn(conn)
 
-    @func_sync
-    async def clear(self):
-        async with self.get_connection() as conn:  # type: asyncpg.connection.Connection
+    def clear(self):
+        with self._connection_pool.connection() as conn:  # type: psycopg.Connection
             tables = []
-            for res in await conn.fetch('select schemaname, tablename from pg_tables where schemaname not in (\'pg_catalog\', \'information_schema\')'):
+            for res in conn.execute('select schemaname, tablename from pg_tables where schemaname not in (\'pg_catalog\', \'information_schema\')'):
                 tables.append(f'"{res[0]}"."{res[1]}"')
-            async with conn.transaction():
+            with conn.transaction():
                 for table in tables:
-                    await conn.execute(f'DROP TABLE {table} CASCADE')
+                    conn.execute(f'DROP TABLE {table} CASCADE')
 
-    @func_sync
-    async def create(self):
+    def create(self):
         all_tables = self._tables.copy()
         for table in self._tables:
             all_tables.extend(table._subtables_.values())
-        async with self.get_connection() as conn:  #type: asyncpg.connection.Connection
-            async with conn.transaction():
+        with self._connection_pool.connection() as conn:  # type: psycopg.Connection
+            with conn.transaction():
                 for table in all_tables:
-                    await conn.execute(self._trans.create_table(table))
+                    conn.execute(self._trans.create_table(table))
                     for field in table.fields.values():
                         if field.indexed:
-                            await conn.execute(self._trans.create_index(table, field))
+                            conn.execute(self._trans.create_index(table, field))
 
                 for table in all_tables:
                     for field in table.fields.values():
                         if field.ref:
-                            await conn.execute(self._trans.add_reference(table, field))
+                            conn.execute(self._trans.add_reference(table, field))
 
-    @func_sync
-    async def insert(self, item: DBTable):
+    def insert(self, item: DBTable):
         fields: List[Tuple[DBField, Any]] = []
         for name, field in item.fields.items():
             fields.append((field, getattr(item, name, DefaultValue)))
-        async with self.get_connection() as conn:
+        with self._connection_pool.connection() as conn:  # type: psycopg.Connection
             sql, values = self._trans.insert(item.__class__, fields)
-            new_id = await conn.fetchval(sql, *values)
+            with conn.cursor(binary=True) as curr:
+                new_id = curr.execute(sql, values).fetchone()[0]
             setattr(item, item._pk_.name, new_id)
 
             for table in item._subtables_.values():
@@ -116,33 +116,33 @@ class DBFactory:
                     for name, field in table.fields.items():
                         fields.append((field, getattr(row, name, DefaultValue)))
                     sql, values = self._trans.insert(row.__class__, fields)
-                    new_sub_id = await conn.fetchval(sql, *values)
+                    with conn.cursor(binary=True) as curr:
+                        new_sub_id = conn.execute(sql, values).fetchone()[0]
                     setattr(row, table._pk_.name, new_sub_id)
 
-    @func_sync
-    async def update(self, item: DBTable):
+    def update(self, item: DBTable):
         fields: List[Tuple[DBField, Any]] = []
         for name in item._modified_fields_:
             field = item.fields[name]
             fields.append((field, getattr(item, name, DefaultValue)))
-        async with self.get_connection() as conn:
+        with self._connection_pool.connection() as conn:
             sql, values = self._trans.update(item.__class__, fields)
-            await conn.execute(sql, getattr(item, item._pk_.name), *values)
+            values['v1'] = getattr(item, item._pk_.name)
+            with conn.cursor(binary=True) as curr:
+                curr.execute(sql, values)
 
             for table in item._subtables_.values():
-                sql = self._trans.delete_related(table, item._table_)
-                await conn.execute(sql, getattr(item, item._pk_.name))
+                with conn.cursor(binary=True) as curr:
+                    sql = self._trans.delete_related(table, item._table_)
+                    curr.execute(sql, (getattr(item, item._pk_.name), ))
                 for row in getattr(item, table._snake_name_):
-                    await self.insert(row)
+                    self.insert(row)
 
-    @func_sync
-    async def select(self, query: DBQuery):
-        if not query.prepared_statement:
-            async with self.get_connection() as conn:
-                sql = self._trans.select(query)
-                return await conn.fetch(sql, *query.args.values())
-        else:
-            return await query.prepared_statement.fetch(*query.args.values())
+    def select(self, query: DBQuery):
+        with self._connection_pool.connection() as conn:
+            sql = self._trans.select(query)
+            with conn.cursor(binary=True) as curr:
+                return curr.execute(sql, query.args)
 
 @dataclass
 class DBField:

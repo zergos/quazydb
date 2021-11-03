@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import typing
 from decimal import Decimal
 from random import randint
@@ -56,7 +57,7 @@ class Sale(DBTable):
 
 
 if __name__ == '__main__':
-    db = DBFactory.postgres(database="quazy", user="quazy", password="quazy")
+    db = DBFactory.postgres("dbname=quazy user=quazy password=quazy")
     db.use_module()
 
     db.clear()
@@ -89,15 +90,15 @@ if __name__ == '__main__':
         day1 += timedelta(days=1)
         db.insert(sell)
 
-    with db.query() as q:
+    with db.query() as q, q.get_scheme() as s:
         q.reuse()
-        s = q.scheme
         q.select(data=s.sales.date, date_sum=q.sum(s.sales.rows.qty * s.sales.rows.unit.weight))
         q.sort_by(2)
         q.filter(s.sales.date >= day1 - timedelta(days=5))
         q.filter(q.fields['date_sum'] > 80)
-    with q.prepare():
-        res = db.select(q)
-    print(res)
+    res = db.select(q)
+    for row in res:
+        print(row)
+    #print(res)
 
     print('Done')
