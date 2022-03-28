@@ -3,19 +3,20 @@ from __future__ import annotations
 import asyncio
 from contextlib import contextmanager, asynccontextmanager
 from dataclasses import dataclass, field as data_field
-from datetime import timedelta
 import typing
 from inspect import currentframe
 from types import SimpleNamespace
 from collections import OrderedDict
 from enum import Enum
 
-from quazy.db import DBFactory, DBField, DBTable, Many
+from quazy.db import DBFactory, DBField, DBTable
 from quazy.exceptions import *
 
 if typing.TYPE_CHECKING:
     from typing import *
     from asyncpg.prepared_stmt import PreparedStatement
+
+__all__ = ['DBQuery', 'DBScheme']
 
 
 class DBQueryField:
@@ -219,13 +220,21 @@ class DBJoin:
     condition: Optional[Union[str, DBSQL]] = data_field(default=None)
 
 
+class DBScheme(SimpleNamespace):
+    pass
+
+
+if typing.TYPE_CHECKING:
+    FDBSQL = Union[DBSQL, Callable[[SimpleNamespace], DBSQL]]
+
+
 class DBQuery:
     queries: Dict[Hashable, DBQuery] = {}
 
     class SaveException(Exception):
         pass
 
-    def __init__(self, db: DBFactory):
+    def __init__(self, db: DBFactory, table_class: Optional[Type[DBTable]] = None):
         self.db: DBFactory = db
         self.fields: OrderedDict[str, DBSQL] = OrderedDict()
         self.joins: OrderedDict[str, DBJoin] = OrderedDict()
@@ -239,9 +248,15 @@ class DBQuery:
         self.prepared_statement: Optional[PreparedStatement] = None
         self._hash: Optional[Hashable] = None
 
-        self.scheme: SimpleNamespace = SimpleNamespace()
+        self.scheme: Union[SimpleNamespace, DBQueryField] = DBScheme()
         for table in self.db._tables:
             setattr(self.scheme, table._snake_name_, DBQueryField(self, table))
+
+        if table_class is not None:
+            self.joins['source'] = DBJoin(table_class, DBJoinKind.SOURCE)
+            table_space = DBQueryField(self, table_class)
+            setattr(table_space, '_root', self.scheme)
+            self.scheme = table_space
 
     def __enter__(self) -> DBQuery:
         return self
@@ -306,23 +321,31 @@ class DBQuery:
         self.args[key] = value
         return DBSQL(self, f'%({key})')
 
-    def select(self, **fields):
-        for field_name, field_value in fields.items():
-            self.fields[field_name] = field_value
+    def _eval_field(self, field: FDBSQL) -> DBSQL:
+        return field(self.scheme) if callable(field) else field
 
-    def sort_by(self, *fields):
+    def select(self, **fields) -> DBQuery:
+        for field_name, field_value in fields.items():
+            self.fields[field_name] = self._eval_field(field_value)
+        return self
+
+    def sort_by(self, *fields) -> DBQuery:
         for field in fields:
             self.sort_list.append(DBSQL(self, field))
+        return self
 
-    def filter(self, expression: DBSQL):
-        self.filters.append(expression)
+    def filter(self, expression: FDBSQL) -> DBQuery:
+        self.filters.append(self._eval_field(expression))
+        return self
 
-    def group_filter(self, expression: DBSQL):
-        self.group_filters.append(expression)
+    def group_filter(self, expression: FDBSQL) -> DBQuery:
+        self.group_filters.append(self._eval_field(expression))
+        return self
 
-    def group_by(self, *fields: DBSQL):
+    def group_by(self, *fields: FDBSQL) -> DBQuery:
         for field in fields:
-            self.groups.append(DBSQL(self, field))
+            self.groups.append(DBSQL(self, self._eval_field(field)))
+        return self
 
     def __getitem__(self, item: str):
         return getattr(self.scheme, item)
@@ -331,7 +354,9 @@ class DBQuery:
         self.has_aggregates = True
         return expr.aggregate('sum')
 
-    def count(self, expr: DBSQL):
+    def count(self, expr: DBSQL = None):
+        if expr is None:
+            expr = DBSQL(self, '*')
         self.has_aggregates = True
         return expr.aggregate('count')
 
@@ -346,3 +371,12 @@ class DBQuery:
     def max(self, expr: DBSQL):
         self.has_aggregates = True
         return expr.aggregate('max')
+
+    def fetch(self):
+        return self.db.select(self)
+
+    def fetch_count(self):
+        if len(self.fields) > 0:
+            raise QuazyError('Use `fetch_count` as single field')
+        self.fields['result'] = DBSQL(self, '*').aggregate('count')
+        return self.fetch().fetchone().result

@@ -57,8 +57,13 @@ class Sale(DBTable):
 
 
 if __name__ == '__main__':
-    db = DBFactory.postgres("dbname=quazy user=quazy password=quazy")
+    db = DBFactory.postgres("postgresql://quazy:quazy@localhost/quazy")
     db.use_module()
+
+    #import jsonpickle
+    #print(jsonpickle.encode(db._tables))
+
+    #sys.exit()
 
     db.clear()
     db.create()
@@ -92,7 +97,7 @@ if __name__ == '__main__':
 
     with db.query() as q, q.get_scheme() as s:
         q.reuse()
-        q.select(data=s.sales.date, date_sum=q.sum(s.sales.rows.qty * s.sales.rows.unit.weight))
+        q.select(data=lambda s: s.sales.date, date_sum=q.sum(s.sales.rows.qty * s.sales.rows.unit.weight))
         q.sort_by(2)
         q.filter(s.sales.date >= day1 - timedelta(days=5))
         q.filter(q.fields['date_sum'] > 80)
@@ -100,5 +105,8 @@ if __name__ == '__main__':
     for row in res:
         print(row)
     #print(res)
+
+    cnt_test = db.query(Sale).fetch_count()
+    print(cnt_test)
 
     print('Done')

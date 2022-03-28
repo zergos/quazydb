@@ -1,4 +1,5 @@
 import typing
+from typing import Optional
 from datetime import datetime, timedelta, date, time
 from decimal import Decimal
 from uuid import UUID

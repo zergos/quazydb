@@ -7,6 +7,7 @@ from dataclasses import dataclass, field as data_field
 
 import psycopg
 import psycopg_pool
+from psycopg.rows import namedtuple_row
 
 from .exceptions import *
 
@@ -18,7 +19,7 @@ from typing import ClassVar
 if typing.TYPE_CHECKING:
     from typing import *
     import asyncpg
-    from .query import DBQuery
+    from .query import DBQuery, DBJoin, DBJoinKind
 
 __all__ = ['DBFactory', 'DBField', 'DBTable', 'UX', 'Many']
 
@@ -44,7 +45,8 @@ class DBFactory:
         pool.wait()
         return DBFactory(pool)
 
-    def use(self, cls: Type[DBTable]):
+    def use(self, cls: Type[DBTable], schema: str = None):
+        cls._schema_ = schema
         self._tables.append(cls)
         setattr(self, cls.__name__, cls)
         return cls
@@ -59,13 +61,13 @@ class DBFactory:
         for v in globalns.values():
             if inspect.isclass(v) and v is not DBTable and issubclass(v, DBTable) and not v._meta_:
                 tables.append(v)
-                self.use(v)
+                self.use(v, schema)
         for table in tables:
             table.resolve_types(globalns)
 
-    def query(self) -> DBQuery:
+    def query(self, table_class: Optional[Type[DBTable]] = None) -> DBQuery:
         from .query import DBQuery
-        return DBQuery(self)
+        return DBQuery(self, table_class)
 
     def get_connection(self) -> psycopg.Connection:
         return self._connection_pool.getconn()
@@ -141,8 +143,9 @@ class DBFactory:
     def select(self, query: DBQuery):
         with self._connection_pool.connection() as conn:
             sql = self._trans.select(query)
-            with conn.cursor(binary=True) as curr:
+            with conn.cursor(binary=True, row_factory=namedtuple_row) as curr:
                 return curr.execute(sql, query.args)
+
 
 @dataclass
 class DBField:
