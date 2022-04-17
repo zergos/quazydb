@@ -32,24 +32,44 @@ class DBQueryField:
         if self._path not in self._query.joins:
             self._query.joins[self._path] = DBJoin(self._table, DBJoinKind.SOURCE)
 
-        if item not in self._table.fields:
-            raise QuazyFieldNameError(f'field {item} not found in {self._table.__name__}')
-
-        field: DBField = self._table.fields[item]
-        if field.ref or field.many_field:
-            join_path = f'{self._path}__{field.type._snake_name_}'
-            if join_path not in self._query.joins:
-                if field.ref:
+        if item in self._table.fields:
+            field: DBField = self._table.fields[item]
+            if field.ref:
+                join_path = f'{self._path}__{field.type._snake_name_}'
+                if join_path not in self._query.joins:
                     self._query.joins[join_path] = DBJoin(field.type, DBJoinKind.LEFT, f'{self._path}.{item} = {join_path}.{field.type._pk_.name}')
-                else:
-                    self._query.joins[join_path] = DBJoin(field.type, DBJoinKind.LEFT, f'{self._path}.{self._table._pk_.name} = {join_path}.{field.reverse_name}')
+                return DBQueryField(self._query, field.type, join_path)
+            return DBSQL(self._query, f'{self._path}.{item}')
 
-            return DBQueryField(self._query, field.type, join_path)
+        elif item in self._table._subtables_:
+            table = self._table._subtables_[item]
+            join_path = f'{self._path}__{table._snake_name_}'
+            if join_path not in self._query.joins:
+                self._query.joins[join_path] = DBJoin(table, DBJoinKind.LEFT,
+                                                  f'{self._path}.{self._table._pk_.name} = {join_path}.{self._table._table_}')
+            return DBQueryField(self._query, table, join_path)
 
-        return DBSQL(self._query, f'{self._path}.{item}')
+        elif item in self._table._many_fields_:
+            table = self._table._many_fields_
+            join_path = f'{self._path}__{table._snake_name_}'
+            if join_path not in self._query.joins:
+                self._query.joins[join_path] = DBJoin(table, DBJoinKind.LEFT,
+                                                  f'{self._path}.{self._table._pk_.name} = {join_path}.{self._table._table_}')
+            return DBQueryField(self._query, table, join_path)
+
+        raise QuazyFieldNameError(f'field {item} not found in {self._table.__name__}')
 
     def __str__(self):
         return self._path
+
+    def __eq__(self, other) -> DBSQL:
+        return typing.cast(DBSQL, getattr(self, self._table._pk_.name)) == other
+
+    def __ne__(self, other) -> DBSQL:
+        return typing.cast(DBSQL, getattr(self, self._table._pk_.name)) != other
+
+    def __contains__(self, item) -> DBSQL:
+        return typing.cast(DBSQL, getattr(self, self._table._pk_.name) in item)
 
 
 class DBSQL:
@@ -253,7 +273,7 @@ class DBQuery:
             setattr(self.scheme, table._snake_name_, DBQueryField(self, table))
 
         if table_class is not None:
-            self.joins['source'] = DBJoin(table_class, DBJoinKind.SOURCE)
+            self.joins[table_class._snake_name_] = DBJoin(table_class, DBJoinKind.SOURCE)
             table_space = DBQueryField(self, table_class)
             setattr(table_space, '_root', self.scheme)
             self.scheme = table_space
@@ -306,9 +326,11 @@ class DBQuery:
         if isinstance(value, DBSQL):
             return value
         if isinstance(value, str):
-            return DBSQL(self, value)
+            return DBSQL(self, f"'{value}'")
         if value is None:
             return DBSQL(self, 'NULL')
+        if isinstance(value, DBTable):
+            value = getattr(value, value._pk_.name)
         if value in self.args.values():
             key = list(self.args.keys())[list(self.args.values()).index(value)]
             return DBSQL(self, f'%({key})s', aggregated)
@@ -327,6 +349,10 @@ class DBQuery:
     def select(self, **fields) -> DBQuery:
         for field_name, field_value in fields.items():
             self.fields[field_name] = self._eval_field(field_value)
+        return self
+
+    def select_all(self) -> DBQuery:
+        self.fields['*'] = DBSQL(self, '*')
         return self
 
     def sort_by(self, *fields) -> DBQuery:
@@ -375,8 +401,24 @@ class DBQuery:
     def fetch(self):
         return self.db.select(self)
 
-    def fetch_count(self):
+    def fetchone(self):
+        return self.fetch().fetchone()
+
+    def fetch_aggregate(self, function: str):
         if len(self.fields) > 0:
-            raise QuazyError('Use `fetch_count` as single field')
-        self.fields['result'] = DBSQL(self, '*').aggregate('count')
+            raise QuazyError(f'Use `fetch_{function}` as single field')
+        self.fields['result'] = DBSQL(self, '*').aggregate(function)
         return self.fetch().fetchone().result
+
+    def fetch_count(self):
+        return self.fetch_aggregate('count')
+
+    def fetch_max(self):
+        return self.fetch_aggregate('max')
+
+    def fetch_min(self):
+        return self.fetch_aggregate('min')
+
+    def fetch_avg(self):
+        return self.fetch_aggregate('avg')
+

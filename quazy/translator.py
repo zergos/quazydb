@@ -77,7 +77,8 @@ class Translator:
         cols = ', '.join(
             f'"{field.column}" {cls.type_name(field)} {cls.column_options(field)}'
             for field in table.fields.values()
-            if not field.many_field and not field.prop
+            #if not field.many_field and not field.prop
+            if not field.prop
         )
         res = f'CREATE TABLE {cls.table_name(table)} ({cols})'
         return res
@@ -107,8 +108,8 @@ class Translator:
         values: Dict[str, Any] = {}
         idx = 1
         for field, value in fields:
-            if field.many_field:
-                continue
+            #if field.many_field:
+            #    continue
             if field.pk:
                 sql_values.append('DEFAULT')
             elif value == DefaultValue:
@@ -126,7 +127,8 @@ class Translator:
                 values[f'v{idx}'] = cls.get_value(field, value)
                 idx += 1
 
-        columns = ','.join(f'"{field.column}"' for field, _ in fields if not field.many_field)
+        #columns = ','.join(f'"{field.column}"' for field, _ in fields if not field.many_field)
+        columns = ','.join(f'"{field.column}"' for field, _ in fields)
         row = ','.join(sql_values)
         res = f'INSERT INTO {cls.table_name(table)} ({columns}) VALUES ({row}) RETURNING "{table._pk_.column}"'
         return res, values
@@ -144,7 +146,8 @@ class Translator:
         sql_values: List[str] = []
         values: Dict[str, Any] = {}
         idx = 2
-        filtered = [f for f in fields if not f[0].many_field and not f[0].pk]
+        #filtered = [f for f in fields if not f[0].many_field and not f[0].pk]
+        filtered = [f for f in fields if not f[0].pk]
         for field, value in filtered:
             sql_values.append(f'%(v{idx})s')
             values[f'v{idx}'] = cls.get_value(field, value)
@@ -172,7 +175,7 @@ class Translator:
         sql = 'SELECT\n'
         fields = []
         for field, value in query.fields.items():
-            fields.append(f'{cls.sql_value(value)} AS "{field}"')
+            fields.append(f'{cls.sql_value(value)} AS "{field}"') if field != '*' else fields.append(cls.sql_value(value))
         joins = []
         for join_name, join in query.joins.items():
             if join.kind == DBJoinKind.SOURCE:

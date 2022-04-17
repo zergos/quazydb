@@ -7,7 +7,7 @@ from random import randint
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
-from quazy.db import DBFactory, DBTable, Many
+from quazy.db import DBFactory, DBTable, DBField, Many
 from quazy.query import DBQuery, DBQueryField
 
 from typing import Optional
@@ -19,9 +19,13 @@ class NamedTable(DBTable):
     _meta_ = True
     name: str
 
+    def __str__(self):
+        return f'Named item is {self.name}'
+
 
 class Client(NamedTable):
-    city: 'City'
+    city: 'City' = DBField(reverse_name='clients')
+    fact_city: 'City' = DBField(reverse_name='fact_clients')
 
     def __str__(self) -> str:
         return self.city.name
@@ -38,7 +42,7 @@ class Unit(NamedTable):
 class Item(NamedTable):
     base_unit: Unit
     description: Optional[str]
-    # cities: Many[City]
+    #cities: Many[City]
 
     class Unit(DBTable):
         unit: Unit
@@ -71,17 +75,22 @@ if __name__ == '__main__':
     krasnodar = City(name='Krasnodar')
     db.insert(krasnodar)
 
+    novoross = City(name='Novorossiysk')
+    db.insert(novoross)
+
     qty = Unit(name='qty', weight=1)
     db.insert(qty)
     pack = Unit(name='pack', weight=10)
     db.insert(pack)
 
-    buyer = Client(name='Andrey', city=krasnodar)
+    buyer = Client(name='Andrey', city=krasnodar, fact_city=novoross)
     db.insert(buyer)
 
     potato = Item(name='Potato', base_unit=qty)
     potato.units.add(Item.Unit(unit=pack, cnt=10))
     potato.units.add(Item.Unit(unit=pack, cnt=20))
+    #potato.cities.add(krasnodar)
+    #potato.cities.add(novoross)
     db.insert(potato)
 
     potato.name = 'New potato'
@@ -108,5 +117,11 @@ if __name__ == '__main__':
 
     cnt_test = db.query(Sale).fetch_count()
     print(cnt_test)
+
+    pot = db.get(Item, name='New potato')
+    print(pot)
+
+    #print(db.query(novoross.fact_clients).select(name=lambda s: s.name).fetchone())
+    print(db.query(Client).filter(lambda s: s.fact_city == novoross).select(name=lambda s: s.name).fetchone())
 
     print('Done')
