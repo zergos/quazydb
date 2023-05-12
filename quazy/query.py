@@ -72,6 +72,37 @@ class DBQueryField:
         return typing.cast(DBSQL, getattr(self, self._table._pk_.name) in item)
 
 
+class QQueryField:
+    def __init__(self, query: DBQuery, subquery: DBQuery, path: str = None):
+        self._query: DBQuery = query
+        self._subquery: DBQuery = subquery
+        self._path: str = path or subquery.name
+
+    def __getattr__(self, item):
+        if item.startswith('_'):
+            return super().__getattribute__(item)
+
+        if self._path not in self._query.joins:
+            self._query.joins[self._path] = DBJoin(self._subquery, DBJoinKind.SOURCE)
+
+        if item in self._subquery.fields:
+            return DBSQL(self._query, f'{self._path}.{item}')
+
+        raise QuazyFieldNameError(f'field {item} not found in query {self._subquery.__name__}')
+
+    def __str__(self):
+        return self._path
+
+    def __eq__(self, other) -> DBSQL:
+        raise QuazyWrongOperation
+
+    def __ne__(self, other) -> DBSQL:
+        raise QuazyWrongOperation
+
+    def __contains__(self, item) -> DBSQL:
+        raise QuazyWrongOperation
+
+
 class DBSQL:
     __slots__ = ['sql_text', 'query', 'aggregated']
 
@@ -240,6 +271,12 @@ class DBJoin:
     condition: Optional[Union[str, DBSQL]] = data_field(default=None)
 
 
+@dataclass
+class DBWithClause:
+    query: DBQuery
+    not_materialized: bool
+
+
 class DBScheme(SimpleNamespace):
     pass
 
@@ -254,7 +291,8 @@ class DBQuery:
     class SaveException(Exception):
         pass
 
-    def __init__(self, db: DBFactory, table_class: Optional[Type[DBTable]] = None):
+    def __init__(self, db: DBFactory, table_class: Optional[Type[DBTable]] = None, name: str = ''):
+        self.name = name or f'q{id(self)}'
         self.db: DBFactory = db
         self.fields: OrderedDict[str, DBSQL] = OrderedDict()
         self.joins: OrderedDict[str, DBJoin] = OrderedDict()
@@ -263,6 +301,7 @@ class DBQuery:
         self.groups: List[DBSQL] = []
         self.group_filters: List[DBSQL] = []
         self.has_aggregates: bool = False
+        self.with_queries: List[DBWithClause] = []
         self.args: OrderedDict[str, Any] = OrderedDict()
         self._arg_counter = 0
         self.prepared_statement: Optional[PreparedStatement] = None
@@ -294,6 +333,9 @@ class DBQuery:
             return True
         if self._hash:
             DBQuery.queries[self._hash] = self
+
+    def _get_query_scheme(self):
+        res = SimpleNamespace()
 
     @contextmanager
     def get_scheme(self) -> SimpleNamespace:
@@ -345,6 +387,15 @@ class DBQuery:
 
     def _eval_field(self, field: FDBSQL) -> DBSQL:
         return field(self.scheme) if callable(field) else field
+
+    def with_query(self, subquery: DBQuery, not_materialized: bool = False) -> QQueryField:
+        self.with_queries.append(DBWithClause(subquery, not_materialized))
+        for k, v in subquery.args.items():
+            if k.startswith('_arg_'):
+                self.args[f'_{subquery.name}{k}'] = v
+            else:
+                self.args[k] = v
+        return QQueryField(self, subquery)
 
     def select(self, **fields) -> DBQuery:
         for field_name, field_value in fields.items():

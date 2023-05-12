@@ -7,6 +7,8 @@ from random import randint
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+sys.path.append(r'D:\projects\bol\quazydb')
+
 from quazy.db import DBFactory, DBTable, DBField, Many
 from quazy.query import DBQuery, DBQueryField
 
@@ -106,7 +108,7 @@ if __name__ == '__main__':
 
     with db.query() as q, q.get_scheme() as s:
         q.reuse()
-        q.select(data=lambda s: s.sales.date, date_sum=q.sum(s.sales.rows.qty * s.sales.rows.unit.weight))
+        q.select(date=s.sales.date, date_sum=q.sum(s.sales.rows.qty * s.sales.rows.unit.weight))
         q.sort_by(2)
         q.filter(s.sales.date >= day1 - timedelta(days=5))
         q.filter(q.fields['date_sum'] > 80)
@@ -117,6 +119,12 @@ if __name__ == '__main__':
 
     cnt_test = db.query(Sale).fetch_count()
     print(cnt_test)
+
+    with db.query() as q2:
+        sub = q2.with_query(q)
+        q2.select(total_max=q2.max(sub.date_sum))
+    max_sum = q2.fetchone().total_max
+    print(max_sum)
 
     pot = db.get(Item, name='New potato')
     print(pot)

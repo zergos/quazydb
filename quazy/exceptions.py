@@ -20,3 +20,8 @@ class QuazyTranslatorException(QuazyError):
 
 class QuazyNotSupported(QuazyError):
     pass
+
+
+class QuazyWrongOperation(QuazyError):
+    pass
+

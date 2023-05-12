@@ -36,15 +36,17 @@ camel2snake.r = re.compile(
 class DBFactory:
     _trans = Translator
 
-    def __init__(self, connection_pool):
+    def __init__(self, connection_pool, debug_mode: bool = False):
         self._connection_pool: psycopg_pool.ConnectionPool = connection_pool
         self._tables: List[Type[DBTable]] = []
+        self._debug_mode = debug_mode
 
     @staticmethod
     def postgres(*args, **kwargs) -> DBFactory:
+        debug_mode = kwargs.pop("debug_mode", False)
         pool = psycopg_pool.ConnectionPool(*args, **kwargs)
         pool.wait()
-        return DBFactory(pool)
+        return DBFactory(pool, debug_mode)
 
     def use(self, cls: Type[DBTable], schema: str = None):
         cls._schema_ = schema
@@ -158,12 +160,17 @@ class DBFactory:
                         self.insert(row)
         item._after_update(self)
 
-    def select(self, query: DBQuery):
+    def select(self, query: Union[DBQuery, str]):
+        from quazy.query import DBQuery
         with self._connection_pool.connection() as conn:
-            sql = self._trans.select(query)
-            with conn.cursor(binary=True, row_factory=namedtuple_row) as curr:
-                return curr.execute(sql, query.args)
-
+            if isinstance(query, DBQuery):
+                sql = self._trans.select(query)
+                if self._debug_mode: print(sql)
+                with conn.cursor(binary=True, row_factory=namedtuple_row) as curr:
+                    return curr.execute(sql, query.args)
+            else:
+                with conn.cursor(binary=True, row_factory=namedtuple_row) as curr:
+                    return curr.execute(query)
 
 @dataclass
 class DBField:

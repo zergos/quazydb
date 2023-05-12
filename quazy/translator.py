@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 from .db_types import *
 from .exceptions import *
 
@@ -8,7 +9,7 @@ import typing
 if typing.TYPE_CHECKING:
     from typing import *
     from .db import DBTable, DBField
-    from .query import DBQuery, DBSQL, DBJoinKind
+    from .query import DBQuery, DBSQL, DBJoinKind, DBWithClause
 
 
 class Translator:
@@ -66,6 +67,10 @@ class Translator:
     def table_name(cls, table: Type[DBTable]) -> str:
         schema = table._schema_ + '"."' if table._schema_ else ''
         return f'"{schema}{table._table_}"'
+
+    @classmethod
+    def subquery_name(cls, subquery: DBQuery) -> str:
+        return subquery.name
 
     @classmethod
     def create_index(cls, table: Type[DBTable], field: DBField) -> str:
@@ -169,10 +174,27 @@ class Translator:
         return value.replace("'", "''")
 
     @classmethod
+    def with_select(cls, with_queries: List[DBWithClause]):
+        sql = "WITH\n"
+        with_blocks = []
+        for sub in with_queries:
+            render = cls.select(sub.query)
+            render = render.replace('%(_arg_', f'%(_{cls.subquery_name(sub.query)}_arg_')
+            block = f'{cls.subquery_name(sub.query)} AS {"NOT MATERIALIZED" if sub.not_materialized else ""} (\n{render})\n'
+            with_blocks.append(block)
+        sql += ',\n'.join(with_blocks)
+        return sql
+
+    @classmethod
     def select(cls, query: DBQuery):
         from .query import DBJoinKind
+        from .db import DBTable
 
-        sql = 'SELECT\n'
+        sql = ''
+        if query.with_queries:
+            sql += cls.with_select(query.with_queries)
+
+        sql += 'SELECT\n'
         fields = []
         for field, value in query.fields.items():
             fields.append(f'{cls.sql_value(value)} AS "{field}"') if field != '*' else fields.append(cls.sql_value(value))
@@ -182,7 +204,10 @@ class Translator:
                 op = 'FROM'
             else:
                 op = f'{join.kind.value} JOIN'
-            joins.append(f'{op} {cls.table_name(join.source)} AS "{join_name}"' + (f'\n\tON {cls.sql_value(join.condition)}' if join.condition else ''))
+            if inspect.isclass(join.source) and issubclass(join.source, DBTable):
+                joins.append(f'{op} {cls.table_name(join.source)} AS "{join_name}"' + (f'\n\tON {cls.sql_value(join.condition)}' if join.condition else ''))
+            else:
+                joins.append(f'{op} {cls.subquery_name(join.source)}')
         filters = []
         group_filters = []
         for filter in query.filters:
