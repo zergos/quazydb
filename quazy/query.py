@@ -121,7 +121,7 @@ class DBSQL:
 
     def arg(self, value: Any) -> DBSQL:
         return self.query.arg(value, self.aggregated)
-
+    
     def func1(self, op: str) -> DBSQL:
         return self.sql(f'{op}({self.sql_text})')
 
@@ -137,6 +137,9 @@ class DBSQL:
 
     def cast(self, type_name: str) -> DBSQL:
         return self.sql(f'{self.sql_text}::{type_name}')
+    
+    def postfix(self, sql_text: str) -> DBSQL:
+        return self.sql(f'{self.sql_text} {sql_text}')
 
     def __add__(self, other) -> DBSQL:
         return self.op('+', other)
@@ -282,7 +285,7 @@ class DBScheme(SimpleNamespace):
 
 
 if typing.TYPE_CHECKING:
-    FDBSQL = Union[DBSQL, Callable[[SimpleNamespace], DBSQL]]
+    FDBSQL = DBSQL | Callable[[SimpleNamespace], DBSQL] | str | int
 
 
 class DBQuery:
@@ -301,6 +304,7 @@ class DBQuery:
         self.groups: List[DBSQL] = []
         self.group_filters: List[DBSQL] = []
         self.has_aggregates: bool = False
+        self.window = (None, None)
         self.with_queries: List[DBWithClause] = []
         self.args: OrderedDict[str, Any] = OrderedDict()
         self._arg_counter = 0
@@ -314,7 +318,7 @@ class DBQuery:
         if table_class is not None:
             self.joins[table_class._snake_name_] = DBJoin(table_class, DBJoinKind.SOURCE)
             table_space = DBQueryField(self, table_class)
-            setattr(table_space, '_root', self.scheme)
+            setattr(table_space, '_db', self.scheme)
             self.scheme = table_space
 
     def __enter__(self) -> DBQuery:
@@ -385,8 +389,22 @@ class DBQuery:
         self.args[key] = value
         return DBSQL(self, f'%({key})')
 
-    def _eval_field(self, field: FDBSQL) -> DBSQL:
-        return field(self.scheme) if callable(field) else field
+    def sql(self, expr: FDBSQL, scheme: SimpleNamespace = None) -> DBSQL:
+        if callable(expr):
+            return expr(self.scheme)
+        if isinstance(expr, DBSQL):
+            return expr
+        if isinstance(expr, str):
+            if not expr:
+                raise QuazyFieldTypeError('Expression is empty string')
+            chunks = expr.split('.')
+            value = getattr(self.scheme, chunks[0]) if not scheme else getattr(scheme, chunks[0])
+            if len(chunks) == 1:
+                return value
+            return self.sql(expr[expr.index('.')+1:], value)
+        if type(expr) is int:
+            return DBSQL(self, expr)
+        raise QuazyFieldTypeError('Expression type not supported')
 
     def with_query(self, subquery: DBQuery, not_materialized: bool = False) -> QQueryField:
         self.with_queries.append(DBWithClause(subquery, not_materialized))
@@ -397,79 +415,102 @@ class DBQuery:
                 self.args[k] = v
         return QQueryField(self, subquery)
 
-    def select(self, **fields) -> DBQuery:
+    def select(self, *field_names: str, **fields: FDBSQL) -> DBQuery:
+        for field_name in field_names:
+            self.fields[field_name] = getattr(self.scheme, field_name)
         for field_name, field_value in fields.items():
-            self.fields[field_name] = self._eval_field(field_value)
+            self.fields[field_name] = self.sql(field_value)
         return self
 
     def select_all(self) -> DBQuery:
         self.fields['*'] = DBSQL(self, '*')
         return self
 
-    def sort_by(self, *fields) -> DBQuery:
+    def sort_by(self, *fields: FDBSQL, desc: bool = False) -> DBQuery:
         for field in fields:
-            self.sort_list.append(DBSQL(self, field))
+            self.sort_list.append(self.sql(field) if not desc else self.sql(field).postfix('DESC'))
         return self
 
     def filter(self, expression: FDBSQL) -> DBQuery:
-        self.filters.append(self._eval_field(expression))
+        self.filters.append(self.sql(expression))
         return self
 
     def group_filter(self, expression: FDBSQL) -> DBQuery:
-        self.group_filters.append(self._eval_field(expression))
+        self.group_filters.append(self.sql(expression))
         return self
 
     def group_by(self, *fields: FDBSQL) -> DBQuery:
         for field in fields:
-            self.groups.append(DBSQL(self, self._eval_field(field)))
+            self.groups.append(DBSQL(self, self.sql(field)))
+        return self
+
+    def set_window(self, offset: int | None = None, limit: int | None = None) -> DBQuery:
+        self.window = (offset, limit)
         return self
 
     def __getitem__(self, item: str):
         return getattr(self.scheme, item)
 
-    def sum(self, expr: DBSQL):
+    def sum(self, expr: DBSQL | str | typing.Callable[[SimpleNamespace], DBSQL]) -> DBSQL:
         self.has_aggregates = True
+        expr = self.sql(expr)
         return expr.aggregate('sum')
 
-    def count(self, expr: DBSQL = None):
+    def count(self, expr: FDBSQL = None) -> DBSQL:
         if expr is None:
             expr = DBSQL(self, '*')
+        else:
+            expr = self.sql(expr)
         self.has_aggregates = True
         return expr.aggregate('count')
 
-    def avg(self, expr: DBSQL):
+    def avg(self, expr: FDBSQL) -> DBSQL:
         self.has_aggregates = True
+        expr = self.sql(expr)
         return expr.aggregate('avg')
 
-    def min(self, expr: DBSQL):
+    def min(self, expr: DBSQL) -> DBSQL:
         self.has_aggregates = True
+        expr = self.sql(expr)
         return expr.aggregate('min')
 
-    def max(self, expr: DBSQL):
+    def max(self, expr: DBSQL) -> DBSQL:
         self.has_aggregates = True
+        expr = self.sql(expr)
         return expr.aggregate('max')
 
-    def fetch(self):
-        return self.db.select(self)
+    @contextmanager
+    def execute(self):
+        with self.db.select(self) as curr:
+            yield curr
+
+    def __iter__(self):
+        yield from self.db.select(self)
 
     def fetchone(self):
-        return self.fetch().fetchone()
+        with self.execute() as curr:
+            return curr.fetchone()
 
-    def fetch_aggregate(self, function: str):
+    def fetchall(self):
+        with self.execute() as curr:
+            return curr.fetchall()
+
+    def fetch_aggregate(self, function: str, expr: FDBSQL = None) -> typing.Any:
+        self.fields['result'] = self.sql(expr).aggregate(function)
+        return self.fetchone().result
+
+    def fetch_count(self, expr: FDBSQL = None):
         if len(self.fields) > 0:
-            raise QuazyError(f'Use `fetch_{function}` as single field')
-        self.fields['result'] = DBSQL(self, '*').aggregate(function)
-        return self.fetch().fetchone().result
+            raise QuazyError(f'Use `fetch_count` as single field')
+        self.fields['result'] = self.count(expr)
+        return self.fetchone().result
 
-    def fetch_count(self):
-        return self.fetch_aggregate('count')
+    def fetch_max(self, expr: FDBSQL) -> typing.Any:
+        return self.fetch_aggregate('max', expr)
 
-    def fetch_max(self):
-        return self.fetch_aggregate('max')
+    def fetch_min(self, expr: FDBSQL) -> typing.Any:
+        return self.fetch_aggregate('min', expr)
 
-    def fetch_min(self):
-        return self.fetch_aggregate('min')
-
-    def fetch_avg(self):
-        return self.fetch_aggregate('avg')
+    def fetch_avg(self, expr: FDBSQL) -> typing.Any:
+        return self.fetch_aggregate('avg', expr)
 

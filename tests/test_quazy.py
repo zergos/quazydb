@@ -62,8 +62,22 @@ class Sale(DBTable):
         qty: float
 
 
+import logging
+
+logger = logging.getLogger('psycopg.pool')
+logger.setLevel(logging.DEBUG)
+
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.DEBUG)
+
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(formatter)
+
+logger.addHandler(console_handler)
+
+
 if __name__ == '__main__':
-    db = DBFactory.postgres("postgresql://quazy:quazy@localhost/quazy")
+    db = DBFactory.postgres(conninfo="postgresql://quazy:quazy@localhost/quazy")
     db.use_module()
 
     #import jsonpickle
@@ -71,7 +85,7 @@ if __name__ == '__main__':
 
     #sys.exit()
 
-    db.clear()
+    #db.clear()
     db.create()
 
     krasnodar = City(name='Krasnodar')
@@ -112,9 +126,9 @@ if __name__ == '__main__':
         q.sort_by(2)
         q.filter(s.sales.date >= day1 - timedelta(days=5))
         q.filter(q.fields['date_sum'] > 80)
-    res = db.select(q)
-    for row in res:
-        print(row)
+    with db.select(q) as res:
+        for row in res:
+            print(row)
     #print(res)
 
     cnt_test = db.query(Sale).fetch_count()

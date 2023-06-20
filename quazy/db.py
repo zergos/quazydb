@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import re
 import inspect
+from contextlib import contextmanager
 from dataclasses import dataclass, field as data_field
 
 import psycopg
@@ -44,18 +45,21 @@ class DBFactory:
     @staticmethod
     def postgres(*args, **kwargs) -> DBFactory:
         debug_mode = kwargs.pop("debug_mode", False)
-        pool = psycopg_pool.ConnectionPool(*args, **kwargs)
-        pool.wait()
+        conninfo = kwargs.pop("conninfo")
+        try:
+            pool = psycopg_pool.ConnectionPool(conninfo, *args, kwargs=kwargs)
+            pool.wait()
+        except Exception as e:
+            print(str(e))
         return DBFactory(pool, debug_mode)
 
-    def use(self, cls: Type[DBTable], schema: str = None):
+    def use(self, cls: Type[DBTable], schema: str = 'public'):
         cls._schema_ = schema
         self._tables.append(cls)
         setattr(self, cls.__name__, cls)
         return cls
 
-    def use_module(self, name: str = None, schema: str = None):
-        # TODO: Schema support
+    def use_module(self, name: str = None, schema: str = 'public'):
         if name:
             globalns = vars(sys.modules[name])
         else:
@@ -89,6 +93,11 @@ class DBFactory:
     def release_connection(self, conn: psycopg.Connection):
         self._connection_pool.putconn(conn)
 
+    @contextmanager
+    def connection(self) -> psycopg.Connection:
+        with self._connection_pool.connection() as conn:
+            yield conn
+
     def clear(self):
         with self._connection_pool.connection() as conn:  # type: psycopg.Connection
             tables = []
@@ -98,12 +107,34 @@ class DBFactory:
                 for table in tables:
                     conn.execute(f'DROP TABLE {table} CASCADE')
 
-    def create(self):
+    def all_tables(self, schema: str = 'public') -> list[typing.Type[DBTable]]:
+        all_tables = set(self._tables)
+        for table in self._tables:
+            if table._schema_ == schema:
+                all_tables = all_tables.union(table._subtables_.values())
+        return all_tables
+
+    def create(self, schema: str = None):
+        all_schemas = set()
         all_tables = set(self._tables)
         for table in self._tables:
             all_tables = all_tables.union(table._subtables_.values())
+            if table._schema_:
+                all_schemas.add(table._schema_)
+
+        with self.select("SELECT CONCAT(table_schema,'.',table_name) as table FROM information_schema.tables WHERE table_type LIKE 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')") as created_tables_query:
+            created_tables = [t.table for t in created_tables_query.fetchall()]
+        for table in list(all_tables):
+            if table._schema_ + '.' + table._table_ in created_tables or schema and table._schema_ != schema:
+                all_tables.remove(table)
+
+        if not all_tables:
+            return
+
         with self._connection_pool.connection() as conn:  # type: psycopg.Connection
             with conn.transaction():
+                for schema in all_schemas:
+                    conn.execute(self._trans.create_schema(schema))
                 for table in all_tables:
                     conn.execute(self._trans.create_table(table))
                     for field in table.fields.values():
@@ -160,6 +191,7 @@ class DBFactory:
                         self.insert(row)
         item._after_update(self)
 
+    @contextmanager
     def select(self, query: Union[DBQuery, str]):
         from quazy.query import DBQuery
         with self._connection_pool.connection() as conn:
@@ -167,29 +199,49 @@ class DBFactory:
                 sql = self._trans.select(query)
                 if self._debug_mode: print(sql)
                 with conn.cursor(binary=True, row_factory=namedtuple_row) as curr:
-                    return curr.execute(sql, query.args)
+                    yield curr.execute(sql, query.args)
             else:
                 with conn.cursor(binary=True, row_factory=namedtuple_row) as curr:
-                    return curr.execute(query)
+                    yield curr.execute(query)
+
+    def save(self, item: DBTable, lookup_field: str | None = None):
+        pk_name = item.__class__._pk_.name
+        if lookup_field:
+            row = self.query(item.__class__)\
+                .filter(lambda x: getattr(x, lookup_field) == getattr(item, lookup_field))\
+                .set_window(limit=1)\
+                .select(pk_name)\
+                .fetchone()
+            if row:
+                setattr(item, pk_name, row[0])
+                self.update(item)
+            else:
+                self.insert(item)
+        else:
+            if getattr(item, pk_name):
+                self.update(item)
+            else:
+                self.insert(item)
+
 
 @dataclass
 class DBField:
-    name: str = data_field(default='', init=False)
-    column: str = data_field(default='')
-    type: Union[Type[DBTable], Type[Any]] = data_field(default=None, init=False)
-    pk: bool = data_field(default=False)
-    cid: bool = data_field(default=False)
-    ref: bool = data_field(default=False, init=False)
-    body: bool = data_field(default=False)
-    prop: bool = data_field(default=False)
-    required: bool = data_field(default=True, init=False)
-    indexed: bool = data_field(default=False)
-    unique: bool = data_field(default=False)
-    default: Union[Any, Callable[[], Any]] = data_field(default=None)
-    default_sql: str = data_field(default=None)
-    reverse_name: str = data_field(default=None)
-    #many_field: bool = data_field(default=False, init=False)
-    ux: Optional[UX] = data_field(default=None)
+    name: str = data_field(default='', init=False)         # field name in Python
+    column: str = data_field(default='')                   # field/column name in database
+    type: Union[Type[DBTable], Type[Any]] = data_field(default=None, init=False)  # field type class
+    pk: bool = data_field(default=False)                   # is it primary key?
+    cid: bool = data_field(default=False)                  # is it storage of table name for inherited tables ?
+    ref: bool = data_field(default=False, init=False)      # is it foreign key (reference) ?
+    body: bool = data_field(default=False)                 # is it body field for properties?
+    prop: bool = data_field(default=False)                 # is it property field?
+    required: bool = data_field(default=True, init=False)  # is field not null ?
+    indexed: bool = data_field(default=False)              # is it indexed for fast search ?
+    unique: bool = data_field(default=False)               # is it unique ?
+    default: Union[Any, Callable[[], Any]] = data_field(default=None)  # default value at Python level
+    default_sql: str = data_field(default=None)            # default value at SQL level
+    reverse_name: str = data_field(default=None)           # reverse name for reference fields
+    # many_field: bool = data_field(default=False, init=False)
+    ux: Optional[UX] = data_field(default=None)            # UX/UI options
 
     def set_name(self, name: str):
         self.name = name
@@ -199,6 +251,28 @@ class DBField:
             self.ux = UX(self.name)
         elif not self.ux.title:
             self.ux.title = self.name
+
+    def _dump_schema(self) -> Dict[str, Any]:
+        return {
+            'name': self.name,
+            'column': self.column,
+            'type': db_type_name(self.type),
+            'pk': self.pk,
+            'cid': self.cid,
+            'ref': self.ref,
+            'body': self.body,
+            'prop': self.prop,
+            'required': self.required,
+            'indexed': self.indexed,
+            'unique': self.unique,
+            'default_sql': self.default_sql,
+        }
+
+    @classmethod
+    def _load_schema(cls, state: Dict[str, Any]) -> DBField:
+        field = cls(**state)
+        field.type = db_type_by_name(field.type)
+        return field
 
 
 @dataclass
@@ -325,6 +399,7 @@ class DBTable(metaclass=MetaTable):
         for name, t in cls.__dict__.items():
             if not name.startswith('_') and inspect.isclass(t) and issubclass(t, DBTable):
                 cls._subtables_[t._snake_name_] = t
+                t._schema_ = cls._schema_
                 #cls._many_fields_[name] = t
                 #field = DBField()
                 #field.set_name(t._snake_name_)
@@ -411,6 +486,21 @@ class DBTable(metaclass=MetaTable):
         if key in self.fields:
             self._modified_fields_.add(key)
         return super().__setattr__(key, value)
+
+    @classmethod
+    def _dump_schema(cls):
+        return {
+            'qualname': cls.__qualname__,
+            'table': cls._table_,
+            'fields': {name:f._dump_schema() for name, f in cls.fields},
+            'subtables': {name:t._dump_schema() for name, t in cls._subtables_},
+        }
+
+    @classmethod
+    def _load_schema(cls, state):
+        fields = {name: DBField._load_schema(f) for name, f in state['fields']}
+        fields |= {name: DBTable._load_schema(t) for name, t in state['subtables']}
+        return type(state['qualname'], (DBTable, ), {'_table_': state['table'], **fields})
 
     def _before_update(self, db: DBFactory):
         pass

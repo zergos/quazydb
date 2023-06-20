@@ -75,7 +75,21 @@ class Translator:
     @classmethod
     def create_index(cls, table: Type[DBTable], field: DBField) -> str:
         unique = 'UNIQUE' if field.unique else ''
-        return f'CREATE {unique} INDEX ON {cls.table_name(table)} ("{field.column}")'
+        return f'CREATE {unique} INDEX IF NOT EXISTS {table._table_}_{field.column}_index ON {cls.table_name(table)} ("{field.column}")'
+
+    @classmethod
+    def drop_index(cls, table: Type[DBTable], field: DBField) -> str:
+        res = f'DROP INDEX {table._table_}_{field.column}_index'
+        return res
+
+    @classmethod
+    def set_default_value(cls, table: Type[DBTable], field: DBField, sql_value: str) -> str:
+        res = f'ALTER TABLE {cls.table_name(table)} ALTER COLUMN {field.column} SET DEFAULT {sql_value}'
+        return res
+
+    @classmethod
+    def create_schema(cls, name: str):
+        return f'CREATE SCHEMA IF NOT EXISTS {name}'
 
     @classmethod
     def create_table(cls, table: Type[DBTable]) -> str:
@@ -89,6 +103,37 @@ class Translator:
         return res
 
     @classmethod
+    def add_field(cls, table: Type[DBTable], field: DBField):
+        col = f'"{field.column}" {cls.type_name(field)} {cls.column_options(field)}'
+        res = f'ALTER TABLE {cls.table_name(table)} ADD COLUMN {col}'
+        return res
+
+    @classmethod
+    def drop_field(cls, table: Type[DBTable], field: DBField):
+        res = f'ALTER TABLE {cls.table_name(table)} DROP COLUMN {field.column}'
+        return res
+
+    @classmethod
+    def rename_field(cls, table: Type[DBTable], old_name: str, new_name: str):
+        res = f'ALTER TABLE {cls.table_name(table)} RENAME COLUMN {old_name} TO {new_name}'
+        return res
+
+    @classmethod
+    def alter_field_type(cls, table: Type[DBTable], field: DBField):
+        res = f'ALTER TABLE {cls.table_name(table)} ALTER COLUMN {field.column} TYPE {cls.type_name(field)} USING {field.column}::{cls.type_name(field)}'
+        return res
+
+    @classmethod
+    def drop_table(cls, table: Type[DBTable]) -> str:
+        res = f'DROP TABLE {cls.table_name(table)}'
+        return res
+
+    @classmethod
+    def rename_table(cls, old_table: Type[DBTable], new_table: Type[DBTable]) -> str:
+        res = f"ALTER TABLE {cls.table_name(old_table)} RENAME TO {cls.table_name(new_table)}"
+        return res
+
+    @classmethod
     def add_reference(cls, table: Type[DBTable], field: DBField) -> str:
         if not field.ref:
             raise QuazyTranslatorException(f'Field {field.name} is not reference')
@@ -97,6 +142,23 @@ class Translator:
         else:
             actions = 'ON DELETE SET NULL'
         res = f'ALTER TABLE {cls.table_name(table)} ADD CONSTRAINT fk_{table._table_}_{field.column} FOREIGN KEY ({field.column}) REFERENCES {cls.table_name(field.type)} ("{field.type._pk_.column}") {actions}'
+        return res
+
+    @classmethod
+    def drop_reference(cls, table: Type[DBTable], field: DBField) -> str:
+        if not field.ref:
+            raise QuazyTranslatorException(f'Field {field.name} is not reference')
+        res = f'ALTER TABLE {cls.table_name(table)} DROP CONSTRAINT fk_{table._table_}_{field.column}'
+        return res
+
+    @classmethod
+    def set_not_null(cls, table: Type[DBTable], field: DBField) -> str:
+        res = f'ALTER TABLE {cls.table_name(table)} ALTER COLUMN {field.column} SET NOT NULL'
+        return res
+
+    @classmethod
+    def drop_not_null(cls, table: Type[DBTable], field: DBField) -> str:
+        res = f'ALTER TABLE {cls.table_name(table)} ALTER COLUMN {field.column} DROP NOT NULL'
         return res
 
     @classmethod
@@ -241,6 +303,11 @@ class Translator:
                 sql += 'HAVING\n\t' + '\n\tAND '.join(group_filters) + '\n'
         if orders:
             sql += 'ORDER BY\n\t' + '\n\t'.join(orders) + '\n'
+
+        if query.window[0] is not None:
+            sql += f'OFFSET {query.window[0]}\n'
+        if query.window[1] is not None:
+            sql += f'LIMIT {query.window[1]}\n'
 
         # sql = sql % dict((key, f'%({key})s') for key in query.args.keys())
         return sql
