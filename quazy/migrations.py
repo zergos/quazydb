@@ -1,0 +1,302 @@
+import inspect
+import json
+import typing
+from enum import StrEnum, auto
+from typing import NamedTuple, Any, Type
+
+from db import DBFactory, DBTable, DBField
+from query import DBQuery
+from db_types import datetime
+from exceptions import *
+
+
+class MigrationVersion(DBTable):
+    schema: str
+    index: int
+
+
+class Migration(DBTable):
+    created_at: datetime = DBField(default_sql="now()")
+    schema: str
+    index: int
+    tables: str
+    commands: str
+
+
+def activate_migrations(db: DBFactory, schema: str):
+    db.use_module("quazy.migrations", "migrations")
+    db.create("migrations")
+
+
+class MigrationType(StrEnum):
+    INITIAL = auto()
+    ADD_TABLE = auto()
+    DELETE_TABLE = auto()
+    RENAME_TABLE = auto()
+    ADD_FIELD = auto()
+    DELETE_FIELD = auto()
+    RENAME_FIELD = auto()
+    ALTER_FIELD_TYPE = auto()
+    ALTER_FIELD_FLAG = auto()
+
+
+class MigrationCommand(NamedTuple):
+    command: MigrationType
+    subject: Any
+
+    def __str__(self):
+        match self.command:
+            case MigrationType.INITIAL:
+                return f"Initial migration"
+            case MigrationType.ADD_TABLE:
+                return f"Add table {self.subject.__qualname__}"
+            case MigrationType.DELETE_TABLE:
+                return f"Delete table {self.subject.__qualname__}"
+            case MigrationType.RENAME_TABLE:
+                return f"Raname table {self.subject[0].__qualname__} to {self.subject[1].__qualname__}"
+            case MigrationType.ADD_FIELD:
+                return f"Add field {self.subject[1].name} to table {self.subject[0].__qualname__}"
+            case MigrationType.DELETE_FIELD:
+                return f"Delete field {self.subject[1].name} from table {self.subject[0].__qualname__}"
+            case MigrationType.RENAME_FIELD:
+                return f"Rename field {self.subject[1]} to {self.subject[2]} at table {self.subject[0].__qualname__}"
+            case MigrationType.ALTER_FIELD_TYPE:
+                return f"Alter field type {self.subject[1].name} from {self.subject[2]} to {self.subject[3]} at table {self.subject[0].__qualname__}"
+            case MigrationType.ALTER_FIELD_FLAG:
+                return f"Alter field {self.subject[1].name} flag {self.subject[2]} to value {self.subject[3]} at table {self.subject[0].__qualname__}"
+            case _:
+                return f"Custom command: {self.command} {self.subject}"
+
+    def save(self) -> dict[str, typing.Any]:
+        args = []
+        for arg in self.subject:
+            if issubclass(arg, DBTable):
+                args.append(('DBTable', arg._dump_schema()))
+            elif isinstance(arg, DBField):
+                args.append(('DBField', arg._dump_schema()))
+            elif isinstance(arg, str):
+                args.append(('str', arg))
+            elif type(arg) is bool:
+                args.append(('bool', str(arg)))
+            else:
+                raise QuazyError('Wrong arg type in command argument')
+        return {'command': self.command, 'subject': args}
+
+    @classmethod
+    def load(cls, data: dict[str, typing.Any]):
+        args = []
+        for arg in data['subject']:
+            if arg[0] == 'DBTable':
+                args.append(DBTable._load_schema(arg[1]))
+            elif arg[0] == 'DBField':
+                args.append(DBField._load_schema(arg[1]))
+            elif arg[0] == 'str':
+                args.append(arg)
+            elif arg[0] == 'bool':
+                args.append(arg[1] == 'True')
+            else:
+                raise QuazyError('Wrong arg type in command loading')
+        return cls(command=data['command'], subject=tuple(args))
+
+
+def _get_all_tables(module: dict[str, DBTable]) -> dict[str, DBTable]:
+    all_tables = dict(module)
+    for table in module.values():
+        all_tables |= {t.__qualname__:t for t in table._subtables_.values()}
+    return all_tables
+
+
+def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] | None = None) -> tuple[list[MigrationCommand], list[Type[DBTable]]]:
+    commands: list[MigrationCommand] = []
+
+    # check last migration
+    last_migration = db.query(Migration)\
+        .select('index', 'tables')\
+        .filter(lambda x: x.schema == schema)\
+        .sort_by('index', desc=True)\
+        .fetchone()
+
+    if not last_migration:
+        return [MigrationCommand(MigrationType.INITIAL, None)], db.all_tables(schema)
+
+    # load last schema
+    module_old: dict[str, DBTable] = {}
+    data = json.loads(last_migration.tables)
+    for chunk in data:
+        SomeTable: DBTable = DBTable._load_schema(chunk)
+        module_old |= {SomeTable.__name__: SomeTable}
+
+    for t in module_old.values():
+        t.resolve_types(module_old)
+
+    tables_old = _get_all_tables(module_old)
+
+    # get tables from specified module
+    module_new = {t.__name__: t for t in db._tables if t._schema_ == schema}
+    tables_new = _get_all_tables(module_new)
+
+    # compare two schemes and generate list of changes
+    # 1. Check for new tables
+    tables_to_add = {name_new: t_new for name_new, t_new in tables_new.items() if name_new not in tables_old}
+
+    # 2. Check for deleted tables
+    tables_to_delete = {name_old: t_old for name_old, t_old in tables_old.items() if name_old not in tables_new}
+
+    # 3. Check to rename
+    tables_to_rename = []
+    for pair in rename_list:
+        if pair[0] in tables_to_delete and pair[1] in tables_to_add:
+            tables_to_rename.append((tables_old[pair[0]], tables_new[pair[1]]))
+            del tables_to_delete[pair[0]]
+            del tables_to_add[pair[1]]
+
+    # Generate commands
+    for name, t in tables_to_add:
+        commands.append(MigrationCommand(MigrationType.ADD_TABLE, t))
+    for name, t in tables_to_delete:
+        commands.append(MigrationCommand(MigrationType.DELETE_TABLE, t))
+    for pair in tables_to_rename:
+        commands.append(MigrationCommand(MigrationType.RENAME_TABLE, pair))
+
+    # 4. Check common tables
+    tables_old = {name: t for name, t in tables_old.items() if name in tables_new}
+    tables_new = {name: t for name, t in tables_new.items() if name in tables_old}
+
+    for t_name, table_old in tables_old.items():
+        table_new = tables_new[t_name]
+
+        fields_old = {f.column: f for f in table_old.fields.values()}
+        fields_new = {f.column: f for f in table_new.fields.values()}
+
+        # 4.1. Check new fields
+        fields_to_add = {f_name: f for f_name, f in fields_new.items() if f_name not in fields_old}
+
+        # 4.2. Check for deleted fields
+        fields_to_delete = {f_name: f for f_name, f in fields_old.items() if f_name not in fields_new}
+
+        # 4.3. Check for renamed fields
+        fields_to_rename = []
+        for pair in rename_list:
+            if pair[0] in fields_to_delete and pair[1] in tables_to_add:
+                fields_to_rename.append(pair)
+                del fields_to_delete[pair[0]]
+                del fields_to_add[pair[1]]
+
+        # Generate commands
+        for f in fields_to_add.values():
+            commands.append(MigrationCommand(MigrationType.ADD_FIELD, (table_new, f)))
+        for f in fields_to_delete.values():
+            commands.append(MigrationCommand(MigrationType.DELETE_FIELD, (table_old, f)))
+        for pair in fields_to_rename:
+            commands.append(MigrationCommand(MigrationType.RENAME_FIELD, (table_new, pair[0], pair[1])))
+
+        # 4.4. Check common fields
+        fields_old = {name: f for name, f in fields_old.items() if name in fields_new}
+        fields_new = {name: f for name, f in fields_new.items() if name in fields_old}
+
+        for f_name, field_old in fields_old.items():
+            field_new = fields_new[f_name]
+
+            # 4.4.1. Check flag changed
+            for flag_name in ('pk','cid','prop','required','indexed','unique','default_sql'):
+                if getattr(field_old, flag_name) != getattr(field_new, flag_name):
+                    commands.append(MigrationCommand(MigrationType.ALTER_FIELD_FLAG, (table_new, field_new, flag_name, getattr(field_new, flag_name))))
+
+            # 4.4.2. Check type changed
+            if field_old.type.__name__ != field_new.type.__name__:
+                commands.append(MigrationCommand(MigrationType.ALTER_FIELD_TYPE, (table_new, field_new, field_old.type.__name__, field_new.type.__name__)))
+
+    return commands
+
+
+def apply_changes(db: DBFactory, schema: str, commands: list[MigrationCommand], all_tables: list[Type[DBTable]]):
+
+    if not commands:
+        return
+
+    def save_migration(index: int):
+        saved_tables = [t._dump_schema() for t in all_tables]
+        json_tables = json.dumps(saved_tables, indent=4)
+        saved_commands = [c.save() for c in commands]
+        json_commands = json.dumps(saved_commands, indent=4)
+        migration = Migration(schema=schema, index=index, tables=json_tables, commands=json_commands)
+        db.insert(migration)
+
+        version = MigrationVersion(schema=schema, index=index)
+        db.save(version, 'schema')
+
+    if len(commands) == 1 and commands[0].command == MigrationType.INITIAL:
+        db.create(schema)
+        save_migration(1)
+        return
+
+    trans = db._trans
+    with db.connection() as conn:
+        with conn.transaction():
+            for command in commands:
+                match command.command:
+                    case MigrationType.ADD_TABLE:
+                        conn.execute(trans.create_table(command.subject))
+                        for field in command.subject.fields.values():
+                            if field.ref:
+                                conn.execute(trans.add_reference(command.subject, field))
+
+                    case MigrationType.DELETE_TABLE:
+                        for field in command.subject.fields.values():
+                            if field.ref:
+                                conn.execute(trans.drop_reference(command.subject, field))
+                        conn.execute(trans.drop_table(command.subject))
+
+                    case MigrationType.RENAME_TABLE:
+                        conn.execute(trans.rename_table(*command.subject))
+
+                    case MigrationType.ADD_FIELD:
+                        conn.execute(trans.add_field(*command.subject))
+                        if command.subject[1].ref:
+                            conn.execute(trans.add_reference(*command.subject))
+
+                    case MigrationType.DELETE_FIELD:
+                        if command.subject[1].ref:
+                            conn.execute(trans.drop_reference(*command.subject))
+                        conn.execute(trans.drop_field(*command.subject))
+
+                    case MigrationType.RENAME_FIELD:
+                        conn.execute(trans.rename_field(*command.subject))
+
+                    case MigrationType.ALTER_FIELD_TYPE:
+                        conn.execute(trans.alter_field_type(command.subject[0], command.subject[1]))
+
+                    case MigrationType.ALTER_FIELD_FLAG:
+                        table, field, flag, value = command.subject
+                        match flag:
+                            case 'pk':
+                                raise QuazyNotSupported
+                            case 'cid':
+                                raise QuazyNotSupported
+                            case 'prop':
+                                raise QuazyNotSupported
+                            case 'required':
+                                if field.ref:
+                                    conn.execute(trans.drop_reference(table, field))
+                                    conn.execute(trans.add_reference(table, field))
+                                else:
+                                    if value:
+                                        conn.execute(trans.set_not_null(table, field))
+                                    else:
+                                        conn.execute(trans.drop_not_null(table, field))
+                            case 'indexed':
+                                if value:
+                                    conn.execute(trans.create_index(table, field))
+                                else:
+                                    conn.execute(trans.drop_index(table, field))
+                            case 'unique':
+                                if value:
+                                    conn.execute(trans.create_index(table, field))
+                                else:
+                                    conn.execute(trans.drop_index(table, field))
+                            case 'default_sql':
+                                conn.execute(trans.set_default_value(table, field, value))
+
+            max_index = db.query(Migration).filter(lambda x: x.schema == schema).fetch_max('index')
+            save_migration(max_index+1)
+
