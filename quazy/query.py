@@ -485,15 +485,23 @@ class DBQuery:
             yield curr
 
     def __iter__(self):
-        yield from self.db.select(self)
+        with self.db.select(self) as rows:
+            yield from rows
 
-    def fetchone(self):
+    def fetchone(self) -> Any:
         with self.execute() as curr:
             return curr.fetchone()
 
-    def fetchall(self):
+    def fetchall(self) -> Any:
         with self.execute() as curr:
             return curr.fetchall()
+
+    def fetchvalue(self) -> Any:
+        with self.execute() as curr:
+            return curr.fetchone()[0]
+
+    def exists(self) -> bool:
+        return self.fetchone() is not None
 
     def fetch_aggregate(self, function: str, expr: FDBSQL = None) -> typing.Any:
         self.fields['result'] = self.sql(expr).aggregate(function)

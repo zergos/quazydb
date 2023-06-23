@@ -39,15 +39,15 @@ class DBFactory:
 
     def __init__(self, connection_pool, debug_mode: bool = False):
         self._connection_pool: psycopg_pool.ConnectionPool = connection_pool
-        self._tables: List[Type[DBTable]] = []
+        self._tables: set[Type[DBTable]] = set()
         self._debug_mode = debug_mode
 
     @staticmethod
-    def postgres(*args, **kwargs) -> DBFactory:
+    def postgres(**kwargs) -> DBFactory:
         debug_mode = kwargs.pop("debug_mode", False)
         conninfo = kwargs.pop("conninfo")
         try:
-            pool = psycopg_pool.ConnectionPool(conninfo, *args, kwargs=kwargs)
+            pool = psycopg_pool.ConnectionPool(conninfo, kwargs=kwargs)
             pool.wait()
         except Exception as e:
             print(str(e))
@@ -55,19 +55,25 @@ class DBFactory:
 
     def use(self, cls: Type[DBTable], schema: str = 'public'):
         cls._schema_ = schema
-        self._tables.append(cls)
+        self._tables.add(cls)
         setattr(self, cls.__name__, cls)
         return cls
 
     def use_module(self, name: str = None, schema: str = 'public'):
         if name:
-            globalns = vars(sys.modules[name])
+            if name in sys.modules:
+                globalns = vars(sys.modules[name])
+            else:
+                __import__(name)
+                globalns = vars(sys.modules[name])
         else:
             globalns = sys._getframe(1).f_locals
-        tables: List[Type[DBTable]] = []
+        if s := globalns.get('_SCHEMA_'):
+            schema = s
+        tables: set[Type[DBTable]] = set()
         for v in globalns.values():
             if inspect.isclass(v) and v is not DBTable and issubclass(v, DBTable) and not v._meta_:
-                tables.append(v)
+                tables.add(v)
                 self.use(v, schema)
         for table in tables:
             table.resolve_types(globalns)
@@ -101,35 +107,45 @@ class DBFactory:
     def clear(self):
         with self._connection_pool.connection() as conn:  # type: psycopg.Connection
             tables = []
-            for res in conn.execute('select schemaname, tablename from pg_tables where schemaname not in (\'pg_catalog\', \'information_schema\')'):
+            for res in conn.execute(self._trans.select_all_tables()):
                 tables.append(f'"{res[0]}"."{res[1]}"')
             with conn.transaction():
                 for table in tables:
                     conn.execute(f'DROP TABLE {table} CASCADE')
 
-    def all_tables(self, schema: str = 'public') -> list[typing.Type[DBTable]]:
-        all_tables = set(self._tables)
+    def all_tables(self, schema: str = 'public') -> set[typing.Type[DBTable]]:
+        all_tables = set()
         for table in self._tables:
             if table._schema_ == schema:
+                all_tables.add(table)
                 all_tables = all_tables.union(table._subtables_.values())
         return all_tables
 
-    def create(self, schema: str = None):
-        all_schemas = set()
-        all_tables = set(self._tables)
+    def missed_tables(self, schema: str = None) -> set[Type[DBTable]]:
+        all_tables = self._tables
         for table in self._tables:
             all_tables = all_tables.union(table._subtables_.values())
-            if table._schema_:
-                all_schemas.add(table._schema_)
 
-        with self.select("SELECT CONCAT(table_schema,'.',table_name) as table FROM information_schema.tables WHERE table_type LIKE 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')") as created_tables_query:
-            created_tables = [t.table for t in created_tables_query.fetchall()]
+        with self.select(self._trans.select_all_tables()) as created_tables_query:
+            created_tables = [t.table for t in created_tables_query]
         for table in list(all_tables):
             if table._schema_ + '.' + table._table_ in created_tables or schema and table._schema_ != schema:
                 all_tables.remove(table)
 
+        return all_tables
+
+    def check(self, schema: str = None) -> bool:
+        return len(self.missed_tables(schema)) == 0
+
+    def create(self, schema: str = None):
+        all_tables = self.missed_tables(schema)
         if not all_tables:
             return
+
+        all_schemas = set()
+        for table in self._tables:
+            if table._schema_:
+                all_schemas.add(table._schema_)
 
         with self._connection_pool.connection() as conn:  # type: psycopg.Connection
             with conn.transaction():
@@ -223,6 +239,10 @@ class DBFactory:
             else:
                 self.insert(item)
 
+    def table_exists(self, table: DBTable) -> bool:
+        with self.select(self._trans.is_table_exists(table)) as res:
+            return res.fetchone()[0]
+
 
 @dataclass
 class DBField:
@@ -256,7 +276,7 @@ class DBField:
         return {
             'name': self.name,
             'column': self.column,
-            'type': db_type_name(self.type),
+            'type': db_type_name(self.type) if not self.ref else self.type.__name__,
             'pk': self.pk,
             'cid': self.cid,
             'ref': self.ref,
@@ -271,7 +291,8 @@ class DBField:
     @classmethod
     def _load_schema(cls, state: Dict[str, Any]) -> DBField:
         field = cls(**state)
-        field.type = db_type_by_name(field.type)
+        if not field.ref:
+            field.type = db_type_by_name(field.type)
         return field
 
 
@@ -323,7 +344,7 @@ class MetaTable(type):
             for name, info in attrs['__annotations__'].items():  # type: str, Dict[str, Type]
                 if name.startswith('_') or name == 'fields':
                     continue
-                field: DBField = attrs.get(name, DBField())
+                field: DBField = attrs.pop(name, DBField())
                 field.set_name(name)
                 fields[name] = field
                 if field.pk:
@@ -451,7 +472,7 @@ class DBTable(metaclass=MetaTable):
                     cls._many_fields_[field.name] = t3
                 elif inspect.isclass(t2):
                     #cls._subtables_[field.name] = t2
-                    cls._subtables_[field.name] = t2
+                    cls._many_fields_[field.name] = t2
                 else:
                     raise QuazyFieldTypeError(f'Use DBTable type with many field instead of {t2}')
                 return True
@@ -489,11 +510,12 @@ class DBTable(metaclass=MetaTable):
 
     @classmethod
     def _dump_schema(cls):
+        many_tables = set(cls._many_fields_.values())
         return {
             'qualname': cls.__qualname__,
             'table': cls._table_,
-            'fields': {name:f._dump_schema() for name, f in cls.fields},
-            'subtables': {name:t._dump_schema() for name, t in cls._subtables_},
+            'fields': {name: f._dump_schema() for name, f in cls.fields.items()},
+            'subtables': {name: t._dump_schema() for name, t in cls._subtables_.items() if t not in many_tables},
         }
 
     @classmethod

@@ -177,6 +177,8 @@ class Translator:
         for field, value in fields:
             #if field.many_field:
             #    continue
+            if field.default_sql:
+                continue
             if field.pk:
                 sql_values.append('DEFAULT')
             elif value == DefaultValue:
@@ -195,7 +197,7 @@ class Translator:
                 idx += 1
 
         #columns = ','.join(f'"{field.column}"' for field, _ in fields if not field.many_field)
-        columns = ','.join(f'"{field.column}"' for field, _ in fields)
+        columns = ','.join(f'"{field.column}"' for field, _ in fields if not field.default_sql)
         row = ','.join(sql_values)
         res = f'INSERT INTO {cls.table_name(table)} ({columns}) VALUES ({row}) RETURNING "{table._pk_.column}"'
         return res, values
@@ -311,3 +313,19 @@ class Translator:
 
         # sql = sql % dict((key, f'%({key})s') for key in query.args.keys())
         return sql
+
+    @classmethod
+    def select_all_tables(cls) -> str:
+        return """SELECT CONCAT(table_schema,'.',table_name) as table
+        FROM information_schema.tables
+        WHERE table_type LIKE 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')"""
+
+    @classmethod
+    def is_table_exists(cls, table: DBTable) -> str:
+        return f"""SELECT EXISTS (
+        SELECT FROM 
+            pg_tables
+        WHERE 
+            schemaname = '{table._schema_}' AND 
+            tablename  = '{table._table_}'
+        )"""

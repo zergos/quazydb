@@ -64,7 +64,7 @@ class Sale(DBTable):
 
 import logging
 
-logger = logging.getLogger('psycopg.pool')
+logger = logging.getLogger('psycopg')
 logger.setLevel(logging.DEBUG)
 
 console_handler = logging.StreamHandler()

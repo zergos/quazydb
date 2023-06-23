@@ -1,13 +1,21 @@
 import inspect
 import json
 import typing
-from enum import StrEnum, auto
+try:
+    from enum import StrEnum
+except ImportError:
+    from strenum import StrEnum
+from enum import auto
 from typing import NamedTuple, Any, Type
 
-from db import DBFactory, DBTable, DBField
-from query import DBQuery
-from db_types import datetime
-from exceptions import *
+from .db import DBFactory, DBTable, DBField
+from .query import DBQuery
+from .db_types import datetime
+from .exceptions import *
+
+__all__ = ["check_migrations", "activate_migrations", "get_migrations", "get_changes", "apply_changes"]
+
+_SCHEMA_ = "migrations"
 
 
 class MigrationVersion(DBTable):
@@ -21,11 +29,28 @@ class Migration(DBTable):
     index: int
     tables: str
     commands: str
+    comments: str
 
 
-def activate_migrations(db: DBFactory, schema: str):
-    db.use_module("quazy.migrations", "migrations")
-    db.create("migrations")
+def check_migrations(db: DBFactory) -> bool:
+    db.use_module(__name__)
+    return db.check(_SCHEMA_)
+
+
+def activate_migrations(db: DBFactory):
+    db.use_module(__name__)
+    db.create(_SCHEMA_)
+
+
+def get_migrations(db: DBFactory, schema: str) -> list[tuple[bool, int, datetime, str]]:
+    current = db.query(MigrationVersion).filter(lambda x: x.schema == schema).select("index").fetchone()
+    current_index = current[0] if current else -1
+
+    res = []
+    for row in db.query(Migration).filter(lambda x: x.schema == schema).select("index", "created_at", "comments"):
+        res.append((row.index == current_index, row.index, row.created, row.comments))
+
+    return res
 
 
 class MigrationType(StrEnum):
@@ -69,17 +94,18 @@ class MigrationCommand(NamedTuple):
 
     def save(self) -> dict[str, typing.Any]:
         args = []
-        for arg in self.subject:
-            if issubclass(arg, DBTable):
-                args.append(('DBTable', arg._dump_schema()))
-            elif isinstance(arg, DBField):
-                args.append(('DBField', arg._dump_schema()))
-            elif isinstance(arg, str):
-                args.append(('str', arg))
-            elif type(arg) is bool:
-                args.append(('bool', str(arg)))
-            else:
-                raise QuazyError('Wrong arg type in command argument')
+        if self.subject:
+            for arg in self.subject:
+                if issubclass(arg, DBTable):
+                    args.append(('DBTable', arg._dump_schema()))
+                elif isinstance(arg, DBField):
+                    args.append(('DBField', arg._dump_schema()))
+                elif isinstance(arg, str):
+                    args.append(('str', arg))
+                elif type(arg) is bool:
+                    args.append(('bool', str(arg)))
+                else:
+                    raise QuazyError('Wrong arg type in command argument')
         return {'command': self.command, 'subject': args}
 
     @classmethod
@@ -106,7 +132,9 @@ def _get_all_tables(module: dict[str, DBTable]) -> dict[str, DBTable]:
     return all_tables
 
 
-def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] | None = None) -> tuple[list[MigrationCommand], list[Type[DBTable]]]:
+def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] | None = None) -> tuple[list[MigrationCommand], set[Type[DBTable]]]:
+    db.use_module(__name__)
+
     commands: list[MigrationCommand] = []
 
     # check last migration
@@ -206,10 +234,10 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
             if field_old.type.__name__ != field_new.type.__name__:
                 commands.append(MigrationCommand(MigrationType.ALTER_FIELD_TYPE, (table_new, field_new, field_old.type.__name__, field_new.type.__name__)))
 
-    return commands
+    return commands, db.all_tables(schema)
 
 
-def apply_changes(db: DBFactory, schema: str, commands: list[MigrationCommand], all_tables: list[Type[DBTable]]):
+def apply_changes(db: DBFactory, schema: str, commands: list[MigrationCommand], all_tables: set[Type[DBTable]], comments: str = "", debug: bool = False):
 
     if not commands:
         return
@@ -219,21 +247,24 @@ def apply_changes(db: DBFactory, schema: str, commands: list[MigrationCommand], 
         json_tables = json.dumps(saved_tables, indent=4)
         saved_commands = [c.save() for c in commands]
         json_commands = json.dumps(saved_commands, indent=4)
-        migration = Migration(schema=schema, index=index, tables=json_tables, commands=json_commands)
+        migration = Migration(schema=schema, index=index, tables=json_tables, commands=json_commands, comments=comments)
         db.insert(migration)
 
         version = MigrationVersion(schema=schema, index=index)
         db.save(version, 'schema')
 
     if len(commands) == 1 and commands[0].command == MigrationType.INITIAL:
+        print("Apply initial migration... ", end='')
         db.create(schema)
         save_migration(1)
+        print('Done')
         return
 
     trans = db._trans
     with db.connection() as conn:
         with conn.transaction():
             for command in commands:
+                print(f"Apply command {command}... ", end='')
                 match command.command:
                     case MigrationType.ADD_TABLE:
                         conn.execute(trans.create_table(command.subject))
@@ -296,7 +327,9 @@ def apply_changes(db: DBFactory, schema: str, commands: list[MigrationCommand], 
                                     conn.execute(trans.drop_index(table, field))
                             case 'default_sql':
                                 conn.execute(trans.set_default_value(table, field, value))
+                print("Done")
 
             max_index = db.query(Migration).filter(lambda x: x.schema == schema).fetch_max('index')
             save_migration(max_index+1)
 
+            print("Complete")

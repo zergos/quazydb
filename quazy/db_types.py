@@ -24,7 +24,7 @@ def db_type_name(t: typing.Type[typing.Any]) -> str:
     if t in KNOWN_TYPES:
         return t.__name__
     else:
-        raise TypeError("Unsupported field type")
+        raise TypeError("Unsupported field type {t}")
 
 
 def db_type_by_name(name: str) -> typing.Type[typing.Any] | str:
