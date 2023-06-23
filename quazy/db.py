@@ -290,9 +290,15 @@ class DBField:
 
     @classmethod
     def _load_schema(cls, state: Dict[str, Any]) -> DBField:
-        field = cls(**state)
-        if not field.ref:
-            field.type = db_type_by_name(field.type)
+        name = state.pop('name')
+        f_type = state.pop('type')
+        ref = state.pop('ref')
+        required = state.pop('required')
+        field = DBField(**state)
+        field.set_name(name)
+        field.ref = ref
+        field.required = required
+        field._pre_type = db_type_by_name(f_type)
         return field
 
 
@@ -341,7 +347,7 @@ class MetaTable(type):
         fields = MetaTable.collect_bases_fields(bases)
         has_pk = False
         if '__annotations__' in attrs:
-            for name, info in attrs['__annotations__'].items():  # type: str, Dict[str, Type]
+            for name, _ in attrs['__annotations__'].items():  # type: str, Dict[str, Type]
                 if name.startswith('_') or name == 'fields':
                     continue
                 field: DBField = attrs.pop(name, DBField())
@@ -510,19 +516,24 @@ class DBTable(metaclass=MetaTable):
 
     @classmethod
     def _dump_schema(cls):
-        many_tables = set(cls._many_fields_.values())
         return {
             'qualname': cls.__qualname__,
+            'module': cls.__module__,
             'table': cls._table_,
             'fields': {name: f._dump_schema() for name, f in cls.fields.items()},
-            'subtables': {name: t._dump_schema() for name, t in cls._subtables_.items() if t not in many_tables},
         }
 
     @classmethod
     def _load_schema(cls, state):
-        fields = {name: DBField._load_schema(f) for name, f in state['fields']}
-        fields |= {name: DBTable._load_schema(t) for name, t in state['subtables']}
-        return type(state['qualname'], (DBTable, ), {'_table_': state['table'], **fields})
+        fields = {name: DBField._load_schema(f) for name, f in state['fields'].items()}
+        Table: typing.Type[DBTable] = typing.cast(typing.Type[DBTable], type(state['qualname'], (DBTable, ), {
+            '__qualname__': state['qualname'],
+            '__module__': state['module'],
+            '__annotations__': {name: f._pre_type for name, f in fields.items()},
+            '_table_': state['table'],
+            **fields
+        }))
+        return Table
 
     def _before_update(self, db: DBFactory):
         pass

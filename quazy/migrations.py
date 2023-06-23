@@ -125,10 +125,14 @@ class MigrationCommand(NamedTuple):
         return cls(command=data['command'], subject=tuple(args))
 
 
-def _get_all_tables(module: dict[str, DBTable]) -> dict[str, DBTable]:
-    all_tables = dict(module)
-    for table in module.values():
-        all_tables |= {t.__qualname__:t for t in table._subtables_.values()}
+def _get_all_tables(module: dict[str, Type[DBTable]]) -> dict[str, Type[DBTable]]:
+
+    all_tables = dict()
+    for n, v in module.items():
+        if inspect.isclass(v) and v is not DBTable and issubclass(v, DBTable) and not v._meta_:
+            all_tables[n] = v
+            all_tables |= {t.__qualname__: t for t in v._subtables_.values()}
+
     return all_tables
 
 
@@ -148,13 +152,13 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
         return [MigrationCommand(MigrationType.INITIAL, None)], db.all_tables(schema)
 
     # load last schema
-    module_old: dict[str, DBTable] = {}
+    module_old: dict[str, Type[DBTable]] = {}
     data = json.loads(last_migration.tables)
     for chunk in data:
-        SomeTable: DBTable = DBTable._load_schema(chunk)
+        SomeTable: Type[DBTable] = DBTable._load_schema(chunk)
         module_old |= {SomeTable.__name__: SomeTable}
 
-    for t in module_old.values():
+    for t in list(module_old.values()):
         t.resolve_types(module_old)
 
     tables_old = _get_all_tables(module_old)
