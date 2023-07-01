@@ -8,6 +8,7 @@ from inspect import currentframe
 from types import SimpleNamespace
 from collections import OrderedDict
 from enum import Enum
+import copy
 
 from quazy.db import DBFactory, DBField, DBTable
 from quazy.exceptions import *
@@ -289,7 +290,7 @@ if typing.TYPE_CHECKING:
 
 
 class DBQuery:
-    queries: Dict[Hashable, DBQuery] = {}
+    queries: ClassVar[Dict[Hashable, DBQuery]] = {}
 
     class SaveException(Exception):
         pass
@@ -297,7 +298,9 @@ class DBQuery:
     def __init__(self, db: DBFactory, table_class: Optional[Type[DBTable]] = None, name: str = ''):
         self.name = name or f'q{id(self)}'
         self.db: DBFactory = db
+        self.table_class: Type[DBTable] | None = table_class
         self.fields: OrderedDict[str, DBSQL] = OrderedDict()
+        self.fetch_objects: bool = table_class is not None
         self.joins: OrderedDict[str, DBJoin] = OrderedDict()
         self.sort_list: List[DBSQL] = []
         self.filters: List[DBSQL] = []
@@ -320,6 +323,22 @@ class DBQuery:
             table_space = DBQueryField(self, table_class)
             setattr(table_space, '_db', self.scheme)
             self.scheme = table_space
+
+    def __copy__(self):
+        obj = object.__new__(DBQuery)
+        deep_attrs = 'fields joins sort_list filters groups group_filters with_queries args'.split()
+        for k, v in self.__dict__.items():
+            if k == "name":
+                obj.name = f'q{id(obj)}'
+            elif k not in deep_attrs:
+                setattr(obj, k, v)
+            else:
+                setattr(obj, k, v.copy())
+        return obj
+
+    def copy(self):
+        obj = copy.copy(self)
+        return obj
 
     def __enter__(self) -> DBQuery:
         return self
@@ -416,6 +435,7 @@ class DBQuery:
         return QQueryField(self, subquery)
 
     def select(self, *field_names: str, **fields: FDBSQL) -> DBQuery:
+        self.fetch_objects = False
         for field_name in field_names:
             self.fields[field_name] = getattr(self.scheme, field_name)
         for field_name, field_value in fields.items():
@@ -423,6 +443,7 @@ class DBQuery:
         return self
 
     def select_all(self) -> DBQuery:
+        self.fetch_objects = False
         self.fields['*'] = DBSQL(self, '*')
         return self
 
@@ -479,12 +500,21 @@ class DBQuery:
         expr = self.sql(expr)
         return expr.aggregate('max')
 
+    def _check_fields(self):
+        if not self.fields:
+            if not self.fetch_objects:
+                raise QuazyError('No fields selected')
+            else:
+                self.fields['*'] = DBSQL(self, '*')
+
     @contextmanager
     def execute(self):
+        self._check_fields()
         with self.db.select(self) as curr:
             yield curr
 
     def __iter__(self):
+        self._check_fields()
         with self.db.select(self) as rows:
             yield from rows
 
@@ -504,14 +534,20 @@ class DBQuery:
         return self.fetchone() is not None
 
     def fetch_aggregate(self, function: str, expr: FDBSQL = None) -> typing.Any:
-        self.fields['result'] = self.sql(expr).aggregate(function)
-        return self.fetchone().result
+        obj = self.copy()
+        obj.fields.clear()
+        obj.fetch_objects = False
+        obj.select(result=obj.sql(expr).aggregate(function))
+        return obj.fetchone().result
 
     def fetch_count(self, expr: FDBSQL = None):
-        if len(self.fields) > 0:
-            raise QuazyError(f'Use `fetch_count` as single field')
-        self.fields['result'] = self.count(expr)
-        return self.fetchone().result
+        #if len(self.fields) > 0:
+        #    raise QuazyError(f'Use `fetch_count` as single field')
+        obj = self.copy()
+        obj.fields.clear()
+        obj.fetch_objects = False
+        obj.select(result=obj.count(expr))
+        return obj.fetchone().result
 
     def fetch_max(self, expr: FDBSQL) -> typing.Any:
         return self.fetch_aggregate('max', expr)
@@ -521,4 +557,5 @@ class DBQuery:
 
     def fetch_avg(self, expr: FDBSQL) -> typing.Any:
         return self.fetch_aggregate('avg', expr)
+
 

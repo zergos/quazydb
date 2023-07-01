@@ -8,7 +8,7 @@ from dataclasses import dataclass, field as data_field
 
 import psycopg
 import psycopg_pool
-from psycopg.rows import namedtuple_row
+from psycopg.rows import namedtuple_row, class_row
 
 from .exceptions import *
 
@@ -17,6 +17,7 @@ from .translator import Translator
 
 import typing
 from typing import ClassVar
+
 if typing.TYPE_CHECKING:
     from typing import *
     from types import SimpleNamespace
@@ -214,7 +215,11 @@ class DBFactory:
             if isinstance(query, DBQuery):
                 sql = self._trans.select(query)
                 if self._debug_mode: print(sql)
-                with conn.cursor(binary=True, row_factory=namedtuple_row) as curr:
+                if query.fetch_objects:
+                    row_maker = class_row(query.table_class)
+                else:
+                    row_maker = namedtuple_row
+                with conn.cursor(binary=True, row_factory=row_maker) as curr:
                     yield curr.execute(sql, query.args)
             else:
                 with conn.cursor(binary=True, row_factory=namedtuple_row) as curr:
