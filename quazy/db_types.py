@@ -5,7 +5,7 @@ from decimal import Decimal
 from uuid import UUID
 
 __all__ = ['Optional', 'datetime', 'timedelta', 'date', 'time', 'Decimal', 'UUID', 'Many', 'DefaultValue', 'KNOWN_TYPES',
-           'db_type_name', 'db_type_by_name']
+           'db_type_name', 'db_type_by_name', 'FieldCID', 'FieldBody', 'Property']
 
 Many = typing.Set
 
@@ -36,6 +36,21 @@ TYPE_MAP = {
     'UUID': UUID,
     'dict': dict,
 }
+
+
+T = typing.TypeVar('T')
+
+
+class FieldCID(typing.Generic[T]):
+    pass
+
+
+class FieldBody:
+    pass
+
+
+class Property(typing.Generic[T]):
+    pass
 
 
 def db_type_name(t: typing.Type[typing.Any]) -> str:

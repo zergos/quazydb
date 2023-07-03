@@ -316,9 +316,12 @@ class Translator:
 
     @classmethod
     def select_all_tables(cls) -> str:
-        return """SELECT CONCAT(table_schema,'.',table_name) as table
-        FROM information_schema.tables
-        WHERE table_type LIKE 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')"""
+        return """SELECT
+        	table_schema as schema, table_name as table
+        FROM
+        	information_schema.tables
+        WHERE
+        	table_type LIKE 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')"""
 
     @classmethod
     def is_table_exists(cls, table: DBTable) -> str:

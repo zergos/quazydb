@@ -452,8 +452,11 @@ class DBQuery:
             self.sort_list.append(self.sql(field) if not desc else self.sql(field).postfix('DESC'))
         return self
 
-    def filter(self, expression: FDBSQL) -> DBQuery:
-        self.filters.append(self.sql(expression))
+    def filter(self, _expression: FDBSQL = None, **kwargs) -> DBQuery:
+        if _expression:
+            self.filters.append(self.sql(_expression))
+        for k, v in kwargs.items():
+            self.filters.append(getattr(self.scheme, k) == v)
         return self
 
     def group_filter(self, expression: FDBSQL) -> DBQuery:

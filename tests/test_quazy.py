@@ -12,6 +12,8 @@ sys.path.append(r'D:\projects\bol\quazydb')
 from quazy.db import DBFactory, DBTable, DBField, Many
 from quazy.query import DBQuery, DBQueryField
 
+from quazy.db_types import FieldCID, FieldBody, Property
+
 from typing import Optional
 if typing.TYPE_CHECKING:
     from typing import *
@@ -62,6 +64,16 @@ class Sale(DBTable):
         qty: float
 
 
+class Catalog(DBTable):
+    _extendable_ = True
+    cid: FieldCID[str]
+    name: str
+
+
+class ItemCatalog(Catalog):
+    unit: Unit
+
+
 import logging
 
 logger = logging.getLogger('psycopg')
@@ -85,7 +97,7 @@ if __name__ == '__main__':
 
     #sys.exit()
 
-    #db.clear()
+    db.clear()
     db.create()
 
     krasnodar = City(name='Krasnodar')
