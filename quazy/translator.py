@@ -41,6 +41,38 @@ class Translator:
         raise QuazyTranslatorException(f'Unsupported DB column type {field.name} ({field.type})')
 
     @classmethod
+    def serialize(cls, field: DBField, value: str) -> str:
+        if field.type is str:
+            return value
+        if field.type in (int, float, bool, bytes, UUID):
+            return f'{value}::text'
+        if field.ref:
+            return cls.serialize(field.type._pk_, value)
+        if field.type in (datetime, timedelta):
+            return f'CAST(extract(epoch from {value}) as integer)'
+        if field.type in (date, time):
+            return f'CAST(extract(epoch from {value}::timestamp) as integer)'
+        raise QuazyFieldTypeError(f'Type `{field.type.__name__}` is not supported for serialization')
+
+    @classmethod
+    def deserialize(cls, field: DBField, field_path: str) -> str:
+        if field.type is str:
+            return field_path
+        if field.type in (int, float, bool, bytes, UUID):
+            return f'CAST({field_path} as {cls.type_name(field)})'
+        if field.ref:
+            return cls.deserialize(field.type._pk_, field_path)
+        if field.type is datetime:
+            return f'to_timestamp({field_path})'
+        if field.type is date:
+            return f'date(to_timestamp({field_path}))'
+        if field.type is time:
+            return f'to_timestamp({field_path})::time'
+        if field.type is timedelta:
+            return f"({field_path} || ' seconds')::interval"
+        raise QuazyFieldTypeError(f'Type `{field.type.__name__}` is not supported for serialization')
+
+    @classmethod
     def pk_type_name(cls, ctype: Type) -> str:
         if ctype is int:
             return 'serial'
@@ -166,39 +198,71 @@ class Translator:
         if field.type is dict:
             return json.dumps(value)
         if field.ref:
-            return value.id
+            return getattr(value, field.type._pk_.name)
         return value
 
     @classmethod
     def insert(cls, table: Type[DBTable], fields: List[Tuple[DBField, Any]]) -> Tuple[str, Dict[str, any]]:
         sql_values: List[str] = []
         values: Dict[str, Any] = {}
+        body_values: Dict[str, Any] = {}
         idx = 1
         for field, value in fields:
-            #if field.many_field:
-            #    continue
-            if field.default_sql:
-                continue
-            if field.pk:
-                sql_values.append('DEFAULT')
-            elif value == DefaultValue:
-                if field.default is None:
+            if not field.prop:  # attr
+                if field.default_sql or field.body:
+                    continue
+                if field.pk:
                     sql_values.append('DEFAULT')
+                elif value == DefaultValue:
+                    if field.default is None:
+                        sql_values.append('DEFAULT')
+                    else:
+                        sql_values.append(f'%(v{idx})s')
+                        if not callable(field.default):
+                            values[f'v{idx}'] = field.default
+                        else:
+                            values[f'v{idx}'] = field.default()
+                        idx += 1
                 else:
                     sql_values.append(f'%(v{idx})s')
-                    if not callable(field.default):
-                        values[f'v{idx}'] = field.default
-                    else:
-                        values[f'v{idx}'] = field.default()
+                    values[f'v{idx}'] = cls.get_value(field, value)
                     idx += 1
-            else:
-                sql_values.append(f'%(v{idx})s')
-                values[f'v{idx}'] = cls.get_value(field, value)
-                idx += 1
+
+            else:  # prop
+                if field.default_sql:
+                    body_values[field.name] = field.default_sql
+                elif value == DefaultValue:
+                    if field.default in None:
+                        body_values[field.name] = 'null'
+                    else:
+                        body_values[field.name] = cls.serialize(field, f'%(v{idx})s')
+                        if not callable(field.default):
+                            values[f'v{idx}'] = field.default
+                        else:
+                            values[f'v{idx}'] = field.default()
+                        idx += 1
+                else:
+                    body_values[field.name] = cls.serialize(field, f'%(v{idx})s')
+                    values[f'v{idx}'] = cls.get_value(field, value)
+                    idx += 1
 
         #columns = ','.join(f'"{field.column}"' for field, _ in fields if not field.many_field)
-        columns = ','.join(f'"{field.column}"' for field, _ in fields if not field.default_sql)
+        columns = ','.join(f'"{field.column}"' for field, _ in fields if not field.default_sql and not field.prop and not field.body)
         row = ','.join(sql_values)
+
+        if table._body_:
+            if columns:
+                columns += ','
+            columns += table._body_.column
+            if body_values:
+                body_value = ', '.join(f"'{name}',{value}" for name, value in body_values.items())
+                body_value = f'json_build_object({body_value})'
+            else:
+                body_value = "'{}'::jsonb"
+            if row:
+                row += ','
+            row += body_value
+
         res = f'INSERT INTO {cls.table_name(table)} ({columns}) VALUES ({row}) RETURNING "{table._pk_.column}"'
         return res, values
 
@@ -223,10 +287,20 @@ class Translator:
             idx += 1
 
         sets: List[str] = []
+        props: List[str] = []
         for field, sql_value in zip(filtered, sql_values):
-            sets.append(f'"{field[0].column}" = {sql_value}')
+            if not field[0].prop:
+                sets.append(f'"{field[0].column}" = {sql_value}')
+            else:
+                props.append("'{}',{}".format(field[0].column, cls.serialize(field[0], sql_value)))
 
         sets_sql = ', '.join(sets)
+        if table._body_ and props:
+            if sets_sql:
+                sets_sql += ', '
+            body_value = ', '.join(props)
+            sets_sql += f'"{table._body_.column}" = "{table._body_.column}" || json_build_object({body_value})'
+
         res = f'UPDATE {cls.table_name(table)} SET {sets_sql} WHERE "{table._pk_.column}" = %(v1)s'
         return res, values
 

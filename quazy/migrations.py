@@ -159,7 +159,7 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
             if f.ref:
                 fields = {fname: field for fname, field in f.type.fields.items() if field.pk or field.cid}
                 annotations = {fname: annot for fname, annot in f.type.__annotations__.items() if fname in fields}
-                ShortClass = type(f.type.__qualname__, (DBTable, ), {
+                ShortClass = typing.cast(typing.Type[DBTable], type(f.type.__qualname__, (DBTable, ), {
                     '__qualname__': f.type.__qualname__,
                     '__module__': f.type.__module__,
                     '__annotations__': annotations,
@@ -167,19 +167,19 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
                     '_schema_': f.type._schema_,
                     '_extendable_': f.type._extendable_,
                     '_discriminator_': f.type._discriminator_,
-                    '_virtual_': True,
+                    '_just_for_typing_': True,
                     **fields
-                })
+                }))
                 all_tables.add(ShortClass)
 
     tables_new = {t.__qualname__: t for t in all_tables}
 
     # compare two schemes and generate list of changes
     # 1. Check for new tables
-    tables_to_add = {name_new: t_new for name_new, t_new in tables_new.items() if name_new not in tables_old and not t_new._virtual_}
+    tables_to_add = {name_new: t_new for name_new, t_new in tables_new.items() if name_new not in tables_old and not t_new._just_for_typing_}
 
     # 2. Check for deleted tables
-    tables_to_delete = {name_old: t_old for name_old, t_old in tables_old.items() if name_old not in tables_new and not t_old._virtual_}
+    tables_to_delete = {name_old: t_old for name_old, t_old in tables_old.items() if name_old not in tables_new and not t_old._just_for_typing_}
 
     # 3. Check to rename
     tables_to_rename = []
@@ -204,9 +204,9 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
     for t_name, table_old in tables_old.items():
         table_new = tables_new[t_name]
 
-        fields_old = {f.column: f for f in table_old.fields.values()}
-        fields_new = {f.column: f for f in table_new.fields.values()}
-
+        fields_old = {f.column: f for f in table_old.fields.values() if not f.prop}
+        fields_new = {f.column: f for f in table_new.fields.values() if not f.prop}
+        
         # 4.1. Check new fields
         fields_to_add = {f_name: f for f_name, f in fields_new.items() if f_name not in fields_old}
 

@@ -35,23 +35,20 @@ class DBQueryField:
 
         if item in self._table.fields:
             field: DBField = self._table.fields[item]
+            if not field.prop:
+                field_path = f'{self._path}.{item}'
+            elif isinstance(field.type, dict):
+                field_path = f"{self._path}->'{item}'"
+            else:
+                field_path = self._query.db._trans.deserialize(field, f"{self._path}->>'{item}'")
             if field.ref:
                 join_path = f'{self._path}__{field.type._snake_name_}'
                 if join_path not in self._query.joins:
-                    self._query.joins[join_path] = DBJoin(field.type, DBJoinKind.LEFT, f'{self._path}.{item} = {join_path}.{field.type._pk_.name}')
+                    self._query.joins[join_path] = DBJoin(field.type, DBJoinKind.LEFT, f'{field_path} = {join_path}.{field.type._pk_.name}')
                 return DBQueryField(self._query, field.type, join_path)
-            return DBSQL(self._query, f'{self._path}.{item}')
+            return DBSQL(self._query, f'{field_path}')
 
-        elif item in self._table._subtables_:
-            table = self._table._subtables_[item]
-            join_path = f'{self._path}__{table._snake_name_}'
-            if join_path not in self._query.joins:
-                self._query.joins[join_path] = DBJoin(table, DBJoinKind.LEFT,
-                                                  f'{self._path}.{self._table._pk_.name} = {join_path}.{self._table._table_}')
-            return DBQueryField(self._query, table, join_path)
-
-        elif item in self._table._many_fields_:
-            table = self._table._many_fields_
+        elif table := self._table._subtables_.get(item) or self._table._many_fields_.get(item):
             join_path = f'{self._path}__{table._snake_name_}'
             if join_path not in self._query.joins:
                 self._query.joins[join_path] = DBJoin(table, DBJoinKind.LEFT,
@@ -453,7 +450,7 @@ class DBQuery:
         return self
 
     def filter(self, _expression: FDBSQL = None, **kwargs) -> DBQuery:
-        if _expression:
+        if _expression is not None:
             self.filters.append(self.sql(_expression))
         for k, v in kwargs.items():
             self.filters.append(getattr(self.scheme, k) == v)
@@ -508,7 +505,8 @@ class DBQuery:
             if not self.fetch_objects:
                 raise QuazyError('No fields selected')
             else:
-                self.fields['*'] = DBSQL(self, '*')
+                for field_name in self.table_class.fields.keys():
+                    self.fields[field_name] = getattr(self.scheme, field_name)
 
     @contextmanager
     def execute(self):

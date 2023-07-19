@@ -420,6 +420,11 @@ class MetaTable(type):
 
                 field.cid = True
                 attrs['_cid_'] = field
+            elif t.startswith(FieldBody.__name__) or field.body:
+                if attrs.get('_body_'):
+                    raise QuazyFieldTypeError(f'Table `{attrs["__qualname__"]}` has body field already')
+
+                attrs['_body_'] = field
 
         # check seed proper declaration
         if attrs.get('_cid_') and not attrs.get('_extendable_'):
@@ -452,13 +457,14 @@ class MetaTable(type):
                     attrs['_is_root_'] = False
                     attrs['_cid_'] = base._cid_
                     attrs['_table_'] = base._table_
+                    attrs['_body_'] = base._body_
 
         return fields
 
 
 class DBTable(metaclass=MetaTable):
     _table_: ClassVar[str]                   # Database table name *
-    _virtual_: ClassVar[bool] = False        # Mark table as virtual (defined inline for foreign schema imports)
+    _just_for_typing_: ClassVar[bool] = False # Mark table as virtual (defined inline for foreign schema imports)
     _snake_name_: ClassVar[str]              # "snake" style table name in plural
     _extendable_: ClassVar[bool] = False     # support for extendable classes
     _cid_: ClassVar[DBField] = None          # CID field (if declared)
@@ -470,6 +476,7 @@ class DBTable(metaclass=MetaTable):
     _subtables_: ClassVar[typing.Dict[str, typing.Type[DBTable]]] = None   # sub tables list
     _meta_: ClassVar[bool] = False           # mark table as meta table (abstract) *
     _pk_: ClassVar[DBField] = None           # reference to primary field
+    _body_: ClassVar[DBField] = None         # reference to body field of None
     _many_fields_: ClassVar[typing.Dict[str, typing.Type[DBTable]]] = None
     fields: ClassVar[typing.Dict[str, DBField]] = None  # list of all fields
     # * marked attributes are able to modify by descendants
@@ -484,13 +491,11 @@ class DBTable(metaclass=MetaTable):
             if name not in cls.fields or cls.fields[name].type is not None:
                 continue
             field: DBField = cls.fields[name]
-            if cls.resolve_type(t, field, globalns):
-                del cls.fields[name]
-                continue
+            cls.resolve_type(t, field, globalns)
             if field.ref:
                 fname = field.reverse_name or cls._snake_name_
                 if fname in field.type.fields and field.type.fields[fname].type != cls:
-                    raise QuazyFieldNameError(f'Cannot create Many field in table {field.type.__name__} by name {fname}. Set different reverse_name.')
+                    raise QuazyFieldNameError(f'Cannot create Many field in table `{field.type.__name__}` with name `{fname}`, it is associated with table `{field.type.fields[fname].type.__name__}`. Set different `reverse_name`.')
                 field.type._many_fields_[fname] = cls
                 setattr(field.type, fname, set())
 
@@ -513,22 +518,71 @@ class DBTable(metaclass=MetaTable):
                 t._schema_ = cls._schema_
                 t.resolve_types(globalns)
 
-        cls._types_resolved_ = True
-
     @classmethod
-    def resolve_type(cls, t: Union[Type, typing._GenericAlias], field: DBField, globalns) -> bool:
+    def resolve_type(cls, t: Union[Type, typing._GenericAlias], field: DBField, globalns):
         if t in KNOWN_TYPES:
             # Base type
             field.type = t
-            return False
+            return
         elif hasattr(t, '__origin__'):  # Union cannot be used with isinstance()
             if t.__origin__ is typing.Union and len(t.__args__) == 2 and t.__args__[1] is type(None):
                 # 'Optional' annotation
                 field.required = False
                 DBTable.resolve_type(t.__args__[0], field, globalns)
-                return False
+                return
             elif t.__origin__ is set and len(t.__args__) == 1:
-                # 'Many' annotation
+                # resolve Many later
+                return
+            elif t.__origin__ is FieldCID:
+                # Field CID declaration
+                field.type = t.__args__[0] if t.__args__ else str
+                return
+            elif t.__origin__ is FieldBody:
+                field.type = dict
+                return
+        elif isinstance(t, typing.ForwardRef):
+            field.ref = True
+            field.type = t._evaluate(globalns, {})
+            return
+        elif inspect.isclass(t) and issubclass(t, DBTable):
+            # Foreign key
+            field.ref = True
+            field.type = t
+            return
+        raise QuazyFieldTypeError(f'Type {t} is not supported as field type')
+
+    @classmethod
+    def resolve_many_types(cls, globalns):
+        if cls._many_resolved_:
+            return
+
+        # eval annotations
+        for name, t in typing.get_type_hints(cls, globalns, globals()).items():
+            if name not in cls.fields or cls.fields[name].type is not None:
+                continue
+            field: DBField = cls.fields[name]
+            if cls.resolve_many(t, field, globalns):
+                del cls.fields[name]
+
+        # eval owner
+        if isinstance(cls._owner_, str):
+            base_cls: DBTable = getattr(sys.modules[cls.__module__], cls._owner_)
+            # field_name = camel2snake(cls.__name__)
+            field = DBField()
+            field.set_name(base_cls._table_)
+            field.type = base_cls
+            field.ref = True
+            field.required = True
+            cls._owner_ = field
+            cls.fields[field.column] = field
+
+        cls._many_resolved_ = True
+
+    @classmethod
+    def resolve_many(cls, t: Union[Type, typing._GenericAlias], field: DBField, globalns) -> bool:
+        if hasattr(t, '__origin__'):  # Union cannot be used with isinstance()
+            if t.__origin__ is set and len(t.__args__) == 1:
+                # 'Many' annotation (HERE)
                 #field.many_field = True
                 #DBTable.resolve_type(t.__args__[0], field, globalns)
                 t2 = t.__args__[0]
@@ -540,22 +594,9 @@ class DBTable(metaclass=MetaTable):
                     #cls._subtables_[field.name] = t2
                     cls._many_fields_[field.name] = t2
                 else:
-                    raise QuazyFieldTypeError(f'Use DBTable type with many field instead of {t2}')
+                    raise QuazyFieldTypeError(f'Use `DBTable` subclass with many field instead of {t2}')
                 return True
-            elif t.__origin__ is FieldCID:
-                # Field CID declaration
-                field.type = t.__args__[0] if t.__args__ else str
-                return False
-        elif isinstance(t, typing.ForwardRef):
-            field.ref = True
-            field.type = t._evaluate(globalns, {})
-            return False
-        elif inspect.isclass(t) and issubclass(t, DBTable):
-            # Foreign key
-            field.ref = True
-            field.type = t
-            return False
-        raise QuazyFieldTypeError(f'Type {t} is not supported as field type')
+        raise QuazyFieldTypeError(f'Type `{t}` is not supported as field type')
 
     def __init__(self, **initial):
         self._modified_fields_: Set[str] = set()
@@ -585,7 +626,7 @@ class DBTable(metaclass=MetaTable):
             'module': cls.__module__,
             'table': cls._table_,
             'schema': cls._schema_,
-            'virtual': cls._virtual_,
+            'just_for_typing': cls._just_for_typing_,
             'extendable': cls._extendable_,
             'discriminator': cls._discriminator_,
             'fields': {name: f._dump_schema() for name, f in cls.fields.items()},
@@ -600,7 +641,7 @@ class DBTable(metaclass=MetaTable):
             '__annotations__': {name: f._pre_type for name, f in fields.items()},
             '_table_': state['table'],
             '_schema_': state['schema'],
-            '_virtual_': state['virtual'],
+            '_just_for_typing_': state['just_for_typing'],
             '_extendable_': state['extendable'],
             '_discriminator_': state['discriminator'],
             **fields

@@ -156,6 +156,6 @@ if __name__ == '__main__':
     print(pot)
 
     #print(db.query(novoross.fact_clients).select(name=lambda s: s.name).fetchone())
-    print(db.query(Client).filter(lambda s: s.fact_city == novoross).select(name=lambda s: s.name).fetchone())
+    print(db.query(Client).filter(fact_city=novoross).select(name=lambda s: s.name).fetchone())
 
     print('Done')
