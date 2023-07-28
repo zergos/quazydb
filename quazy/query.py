@@ -452,8 +452,17 @@ class DBQuery:
     def filter(self, _expression: FDBSQL = None, **kwargs) -> DBQuery:
         if _expression is not None:
             self.filters.append(self.sql(_expression))
+        if kwargs and not self.fetch_objects:
+            raise QuazyError('Query is not associated with table, cat not filter by field names')
         for k, v in kwargs.items():
             self.filters.append(getattr(self.scheme, k) == v)
+        return self
+
+    def exclude(self, **kwargs) -> DBQuery:
+        if not self.fetch_objects:
+            raise QuazyError('Query is not associated with table, cat not filter by field names')
+        for k, v in kwargs.items():
+            self.filters.append(getattr(self.scheme, k) != v)
         return self
 
     def group_filter(self, expression: FDBSQL) -> DBQuery:
