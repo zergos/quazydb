@@ -1,5 +1,5 @@
-import inspect
 import json
+import os
 import typing
 try:
     from enum import StrEnum
@@ -344,3 +344,19 @@ def apply_changes(db: DBFactory, schema: str, commands: list[MigrationCommand], 
             save_migration(max_index+1)
 
             print("Complete")
+
+
+def dump_changes(db: DBFactory, schema: str, directory: str):
+    import yaml
+
+    migrations: typing.Iterator[Migration] = db.query(Migration).filter(schema=schema)
+
+    for migration in migrations:
+        info = '-' + migration.comments[0:32].replace(' ', '-') if migration.comments else ''
+        with open(os.path.join(directory, f'{migration.index:04}{info}.yaml'), "wt") as f:
+            yaml.dump({
+                "comments": migration.comments,
+                "commands": migration.commands,
+                "tables": migration.tables,
+            }, f)
+
