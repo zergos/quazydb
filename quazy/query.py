@@ -509,9 +509,9 @@ class DBQuery:
                     self.fields[field_name] = getattr(self.scheme, field_name)
 
     @contextmanager
-    def execute(self):
+    def execute(self, as_dict: bool = False):
         self._check_fields()
-        with self.db.select(self) as curr:
+        with self.db.select(self, as_dict) as curr:
             yield curr
 
     def __iter__(self):
@@ -519,12 +519,12 @@ class DBQuery:
         with self.db.select(self) as rows:
             yield from rows
 
-    def fetchone(self) -> Any:
-        with self.execute() as curr:
+    def fetchone(self, as_dict: bool = False) -> Any:
+        with self.execute(as_dict) as curr:
             return curr.fetchone()
 
-    def fetchall(self) -> Any:
-        with self.execute() as curr:
+    def fetchall(self, as_dict: bool = False) -> Any:
+        with self.execute(as_dict) as curr:
             return curr.fetchall()
 
     def fetchvalue(self) -> Any:

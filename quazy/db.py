@@ -9,7 +9,7 @@ from dataclasses import dataclass, field as data_field
 
 import psycopg
 import psycopg_pool
-from psycopg.rows import namedtuple_row, class_row
+from psycopg.rows import namedtuple_row, class_row, dict_row
 
 from .exceptions import *
 
@@ -253,20 +253,22 @@ class DBFactory:
         item._after_update(self)
 
     @contextmanager
-    def select(self, query: Union[DBQuery, str]):
+    def select(self, query: Union[DBQuery, str], as_dict: bool = False):
         from quazy.query import DBQuery
         with self._connection_pool.connection() as conn:
             if isinstance(query, DBQuery):
                 sql = self._trans.select(query)
                 if self._debug_mode: print(sql)
-                if query.fetch_objects:
+                if as_dict:
+                    row_maker = dict_row
+                elif query.fetch_objects:
                     row_maker = class_row(query.table_class)
                 else:
                     row_maker = namedtuple_row
                 with conn.cursor(binary=True, row_factory=row_maker) as curr:
                     yield curr.execute(sql, query.args)
             else:
-                with conn.cursor(binary=True, row_factory=namedtuple_row) as curr:
+                with conn.cursor(binary=True, row_factory=dict_row if as_dict else namedtuple_row) as curr:
                     yield curr.execute(query)
 
     def save(self, item: DBTable, lookup_field: str | None = None):
