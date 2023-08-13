@@ -33,8 +33,8 @@ class DBQueryField:
         if self._path not in self._query.joins:
             self._query.joins[self._path] = DBJoin(self._table, DBJoinKind.SOURCE)
 
-        if item in self._table.fields:
-            field: DBField = self._table.fields[item]
+        if item in self._table._fields_:
+            field: DBField = self._table._fields_[item]
             if not field.prop:
                 field_path = f'{self._path}.{item}'
             elif isinstance(field.type, dict):
@@ -452,14 +452,14 @@ class DBQuery:
     def filter(self, _expression: FDBSQL = None, **kwargs) -> DBQuery:
         if _expression is not None:
             self.filters.append(self.sql(_expression))
-        if kwargs and not self.fetch_objects:
+        if kwargs and self.table_class is None:
             raise QuazyError('Query is not associated with table, cat not filter by field names')
         for k, v in kwargs.items():
             self.filters.append(getattr(self.scheme, k) == v)
         return self
 
     def exclude(self, **kwargs) -> DBQuery:
-        if not self.fetch_objects:
+        if self.table_class in None:
             raise QuazyError('Query is not associated with table, cat not filter by field names')
         for k, v in kwargs.items():
             self.filters.append(getattr(self.scheme, k) != v)
@@ -514,7 +514,7 @@ class DBQuery:
             if not self.fetch_objects:
                 raise QuazyError('No fields selected')
             else:
-                for field_name in self.table_class.fields.keys():
+                for field_name in self.table_class._fields_.keys():
                     self.fields[field_name] = getattr(self.scheme, field_name)
 
     @contextmanager

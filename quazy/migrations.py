@@ -155,9 +155,9 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
 
     # extend by related types from other schemas
     for t in all_tables.copy():
-        for f in t.fields.values():
+        for f in t._fields_.values():
             if f.ref:
-                fields = {fname: field for fname, field in f.type.fields.items() if field.pk or field.cid}
+                fields = {fname: field for fname, field in f.type._fields_.items() if field.pk or field.cid}
                 annotations = {fname: annot for fname, annot in f.type.__annotations__.items() if fname in fields}
                 ShortClass = typing.cast(typing.Type[DBTable], type(f.type.__qualname__, (DBTable, ), {
                     '__qualname__': f.type.__qualname__,
@@ -204,8 +204,8 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
     for t_name, table_old in tables_old.items():
         table_new = tables_new[t_name]
 
-        fields_old = {f.column: f for f in table_old.fields.values() if not f.prop}
-        fields_new = {f.column: f for f in table_new.fields.values() if not f.prop}
+        fields_old = {f.column: f for f in table_old._fields_.values() if not f.prop}
+        fields_new = {f.column: f for f in table_new._fields_.values() if not f.prop}
         
         # 4.1. Check new fields
         fields_to_add = {f_name: f for f_name, f in fields_new.items() if f_name not in fields_old}
@@ -279,12 +279,12 @@ def apply_changes(db: DBFactory, schema: str, commands: list[MigrationCommand], 
                 match command.command:
                     case MigrationType.ADD_TABLE:
                         conn.execute(trans.create_table(command.subject))
-                        for field in command.subject.fields.values():
+                        for field in command.subject._fields_.values():
                             if field.ref:
                                 conn.execute(trans.add_reference(command.subject, field))
 
                     case MigrationType.DELETE_TABLE:
-                        for field in command.subject.fields.values():
+                        for field in command.subject._fields_.values():
                             if field.ref:
                                 conn.execute(trans.drop_reference(command.subject, field))
                         conn.execute(trans.drop_table(command.subject))
@@ -356,7 +356,7 @@ def dump_changes(db: DBFactory, schema: str, directory: str):
         with open(os.path.join(directory, f'{migration.index:04}{info}.yaml'), "wt") as f:
             yaml.dump({
                 "comments": migration.comments,
-                "commands": migration.commands,
-                "tables": migration.tables,
+                "commands": json.loads(migration.commands),
+                "tables": json.loads(migration.tables),
             }, f)
 

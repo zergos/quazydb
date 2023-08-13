@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 sys.path.append(r'D:\projects\bol\quazydb')
 
-from quazy.db import DBFactory, DBTable, DBField, Many
+from quazy.db import DBFactory, DBTable, DBField, Many, ManyToMany
 from quazy.query import DBQuery, DBQueryField
 
 from quazy.db_types import FieldCID, FieldBody, Property
@@ -74,6 +74,14 @@ class ItemCatalog(Catalog):
     unit: Unit
 
 
+class User(NamedTable):
+    apps: ManyToMany[App]
+
+
+class App(NamedTable):
+    users: ManyToMany[User]
+
+
 import logging
 
 logger = logging.getLogger('psycopg')
@@ -115,8 +123,8 @@ if __name__ == '__main__':
     db.insert(buyer)
 
     potato = Item(name='Potato', base_unit=qty)
-    potato.units.add(Item.Unit(unit=pack, cnt=10))
-    potato.units.add(Item.Unit(unit=pack, cnt=20))
+    potato.units.append(Item.Unit(unit=pack, cnt=10))
+    potato.units.append(Item.Unit(unit=pack, cnt=20))
     #potato.cities.add(krasnodar)
     #potato.cities.add(novoross)
     db.insert(potato)
@@ -128,7 +136,7 @@ if __name__ == '__main__':
     for i in range(10):
         sell = Sale(date=day1, number=str(i), client=buyer)
         for k in range(3):
-            sell.rows.add(Sale.Row(item=potato, unit=pack, qty=randint(10,100)))
+            sell.rows.append(Sale.Row(item=potato, unit=pack, qty=randint(10,100)))
         day1 += timedelta(days=1)
         db.insert(sell)
 
@@ -157,5 +165,8 @@ if __name__ == '__main__':
 
     #print(db.query(novoross.fact_clients).select(name=lambda s: s.name).fetchone())
     print(db.query(Client).filter(fact_city=novoross).select(name=lambda s: s.name).fetchone())
+
+    user = User(name="zergos", apps=list(App(name=f'app{i+1}') for i in range(10)))
+    db.insert(user)
 
     print('Done')

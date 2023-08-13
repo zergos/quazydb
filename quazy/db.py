@@ -80,6 +80,8 @@ class DBFactory:
                 self.use(v, schema)
         for table in tables:
             table.resolve_types(globalns)
+        for table in tables:
+            table.resolve_types_many(lambda t: self.use(t, schema))
 
     def query(self, table_class: Optional[Type[DBTable]] = None) -> DBQuery:
         from .query import DBQuery
@@ -107,11 +109,12 @@ class DBFactory:
         with self._connection_pool.connection() as conn:
             yield conn
 
-    def clear(self):
+    def clear(self, schema: str = None):
         with self._connection_pool.connection() as conn:  # type: psycopg.Connection
             tables = []
             for res in conn.execute(self._trans.select_all_tables()):
-                tables.append(f'"{res[0]}"."{res[1]}"')
+                if not schema or schema == res[0]:
+                    tables.append(f'"{res[0]}"."{res[1]}"')
             with conn.transaction():
                 for table in tables:
                     conn.execute(f'DROP TABLE {table} CASCADE')
@@ -144,7 +147,7 @@ class DBFactory:
                 if t._is_root_:
                     root_class = t
 
-                for fname, field in t.fields.items():
+                for fname, field in t._fields_.items():
                     if src := field_sources.get(fname):
                         if field.type != fields[fname].type and not issubclass(t, src) and not issubclass(src, t):
                             raise QuazyFieldNameError(f'Same column `{field.name}` in different branches has different type')
@@ -159,7 +162,7 @@ class DBFactory:
                 '__module__': root_class.__module__,
                 '__annotations__': annotations,
                 '_table_': root_class._table_,
-                '_extendable_': True,
+                '_extendable_': False,
                 '_types_resolved_': True,
                 **fields
             }))
@@ -199,36 +202,63 @@ class DBFactory:
                     conn.execute(self._trans.create_schema(schema))
                 for table in all_tables:
                     conn.execute(self._trans.create_table(table))
-                    for field in table.fields.values():
+                    for field in table._fields_.values():
                         if field.indexed:
                             conn.execute(self._trans.create_index(table, field))
 
                 for table in all_tables:
-                    for field in table.fields.values():
+                    for field in table._fields_.values():
                         if field.ref: # and not field.many_field:
                             conn.execute(self._trans.add_reference(table, field))
 
     def insert(self, item: DBTable):
         item._before_insert(self)
         fields: List[Tuple[DBField, Any]] = []
-        for name, field in item.fields.items():
+        for name, field in item._fields_.items():
             fields.append((field, getattr(item, name, DefaultValue)))
         with self._connection_pool.connection() as conn:  # type: psycopg.Connection
+
             sql, values = self._trans.insert(item.__class__, fields)
-            with conn.cursor(binary=True) as curr:
-                new_id = curr.execute(sql, values).fetchone()[0]
-            setattr(item, item._pk_.name, new_id)
+            item.pk = conn.execute(sql, values).fetchone()[0]
 
             for field_name, table in item._subtables_.items():
                 for row in getattr(item, field_name):
                     setattr(row, item._table_, item)
                     fields.clear()
-                    for name, field in table.fields.items():
+                    for name, field in table._fields_.items():
                         fields.append((field, getattr(row, name, DefaultValue)))
                     sql, values = self._trans.insert(row.__class__, fields)
-                    with conn.cursor(binary=True) as curr:
-                        new_sub_id = conn.execute(sql, values).fetchone()[0]
+                    new_sub_id = conn.execute(sql, values).fetchone()[0]
                     setattr(row, table._pk_.name, new_sub_id)
+
+            for field_name, field in item._many_fields_.items():
+                for row in getattr(item, field_name):
+                    if getattr(row, field.source_field) != item.pk:
+                        setattr(row, field.source_field, item.pk)
+                        self.save(row)
+
+            for field_name, field in item._many_to_many_fields_.items():
+                for row in getattr(item, field_name):
+                    if not row.pk:
+                        self.save(row)
+
+                # delete old items, add new items
+                new_indices = set(row.pk for row in getattr(item, field_name))
+                old_indices_sql = self._trans.select_many_indices(field.middle_table, field.source_field, field.source_table._table_)
+                results = conn.execute(old_indices_sql, {"value": item.pk}).fetchone()
+                old_indices = set(results[0]) if results[0] else set()
+
+                indices_to_delete = list(old_indices - new_indices)
+                indices_to_add = list(new_indices - old_indices)
+
+                if indices_to_delete:
+                    delete_indices_sql = self._trans.delete_many_indices(field.middle_table, field.source_field, field.source_table._table_)
+                    conn.execute(delete_indices_sql, {"value": item.pk, "indices": indices_to_delete})
+
+                if indices_to_add:
+                    new_indices_sql = self._trans.insert_many_index(field.middle_table, field.source_field, field.source_table._table_)
+                    for index in indices_to_add:
+                        conn.execute(new_indices_sql, {"value": item.pk, "index": index})
 
         item._after_insert(self)
 
@@ -236,18 +266,16 @@ class DBFactory:
         item._before_update(self)
         fields: List[Tuple[DBField, Any]] = []
         for name in item._modified_fields_:
-            field = item.fields[name]
+            field = item._fields_[name]
             fields.append((field, getattr(item, name, DefaultValue)))
         with self._connection_pool.connection() as conn:
             sql, values = self._trans.update(item.__class__, fields)
             values['v1'] = getattr(item, item._pk_.name)
-            with conn.cursor(binary=True) as curr:
-                curr.execute(sql, values)
+            conn.execute(sql, values)
 
             for table in item._subtables_.values():
-                with conn.cursor(binary=True) as curr:
-                    sql = self._trans.delete_related(table, item._table_)
-                    curr.execute(sql, (getattr(item, item._pk_.name), ))
+                sql = self._trans.delete_related(table, item._table_)
+                conn.execute(sql, (getattr(item, item._pk_.name), ))
                 for row in getattr(item, table._snake_name_):
                     self.insert(row)
         item._after_update(self)
@@ -363,12 +391,24 @@ class UX:
     multiline: bool = data_field(default=False)
 
 
+@dataclass
+class DBManyField:
+    source_table: Type[DBTable]
+    source_field: str | None = None
+
+
+@dataclass
+class DBManyToManyField(DBManyField):
+    middle_table: Type[DBTable] | None = None
+
+
 class MetaTable(type):
     def __new__(cls, clsname: str, bases: Tuple[Type[DBTable], ...], attrs):
         if clsname == 'DBTable':
             return super().__new__(cls, clsname, bases, attrs)
 
         attrs['_many_fields_'] = dict()
+        attrs['_many_to_many_fields_'] = dict()
         MetaTable.collect_fields(bases, attrs)
 
         qualname = attrs['__qualname__']
@@ -382,7 +422,7 @@ class MetaTable(type):
             attrs['_owner_'] = base_cls_name
             field_name = camel2snake(chunks[-1])+'s'
             attrs['_snake_name_'] = field_name
-            if field_name in attrs['fields']:
+            if field_name in attrs['_fields_']:
                 raise QuazySubclassError(f'Subclass name {qualname} repeats field name')
         else:
             attrs['_snake_name_'] = camel2snake(qualname)+'s'
@@ -392,7 +432,7 @@ class MetaTable(type):
         attrs['_subtables_'] = dict()
 
         if '_discriminator_' not in attrs:
-            attrs['_discriminator_'] = attrs['__qualname__']
+            attrs['_discriminator_'] = attrs['__qualname__'] if '_cid_' in attrs else None
         return super().__new__(cls, clsname, bases, attrs)
 
     @staticmethod
@@ -405,15 +445,17 @@ class MetaTable(type):
 
         has_pk = False
         for name, t in attrs.get('__annotations__', {}).items():  # type: str, str
-            if name.startswith('_') or name == 'fields':
+            if name.startswith('_'):
                 continue
             field: DBField = attrs.pop(name, DBField())
             field.set_name(name)
+            if not field.type:
+                field.type = t
             fields[name] = field
             if field.pk:
                 has_pk = True
                 attrs['_pk_'] = field
-            elif t.startswith(FieldCID.__name__) or field.cid:
+            elif t is FieldCID or field.cid:
                 # check CID
                 if not attrs.get('_extendable_'):
                     raise QuazyFieldTypeError(f'Table `{attrs["__qualname__"]}` is not declared with _extendable_ attribute')
@@ -422,7 +464,7 @@ class MetaTable(type):
 
                 field.cid = True
                 attrs['_cid_'] = field
-            elif t.startswith(FieldBody.__name__) or field.body:
+            elif t is FieldBody or field.body:
                 if attrs.get('_body_'):
                     raise QuazyFieldTypeError(f'Table `{attrs["__qualname__"]}` has body field already')
 
@@ -439,7 +481,11 @@ class MetaTable(type):
             fields['id'] = pk
             attrs['_pk_'] = pk
 
-        attrs['fields'] = fields
+        # do not inherit schema
+        if '_schema_' not in attrs:
+            attrs['_schema_'] = None
+
+        attrs['_fields_'] = fields
 
     @staticmethod
     def collect_bases_fields(bases: Tuple[Type, ...], attrs: Dict[str, Any]) -> Dict[str, DBField]:
@@ -450,7 +496,7 @@ class MetaTable(type):
             if issubclass(base, DBTable):
                 base_fields = MetaTable.collect_bases_fields(base.__bases__, attrs)
                 fields.update(base_fields)
-                fields.update(base.fields)
+                fields.update(base._fields_)
 
                 if base._extendable_:
                     if attrs.get('_extendable_'):
@@ -474,13 +520,15 @@ class DBTable(metaclass=MetaTable):
     _discriminator_: ClassVar[typing.Any]    # inherited table inner code
     _schema_: ClassVar[str] = None           # Database schema name *
     _types_resolved_: ClassVar[bool] = False # field types resolution status
+    _many_types_resolved_: ClassVar[bool] = False
     _owner_: ClassVar[typing.Union[str, typing.Type[DBTable]]] = None # table owner of sub table
     _subtables_: ClassVar[typing.Dict[str, typing.Type[DBTable]]] = None   # sub tables list
     _meta_: ClassVar[bool] = False           # mark table as meta table (abstract) *
     _pk_: ClassVar[DBField] = None           # reference to primary field
     _body_: ClassVar[DBField] = None         # reference to body field of None
-    _many_fields_: ClassVar[typing.Dict[str, typing.Type[DBTable]]] = None
-    fields: ClassVar[typing.Dict[str, DBField]] = None  # list of all fields
+    _many_fields_: ClassVar[typing.Dict[str, DBManyField]] = None
+    _many_to_many_fields_: ClassVar[typing.Dict[str, DBManyToManyField]] = None
+    _fields_: ClassVar[typing.Dict[str, DBField]] = None  # list of all fields
     # * marked attributes are able to modify by descendants
 
     @classmethod
@@ -490,38 +538,34 @@ class DBTable(metaclass=MetaTable):
 
         # eval annotations
         for name, t in typing.get_type_hints(cls, globalns, globals()).items():
-            if name not in cls.fields or cls.fields[name].type is not None:
+            if name not in cls._fields_: # or cls.fields[name].type is not None:
                 continue
-            field: DBField = cls.fields[name]
-            cls.resolve_type(t, field, globalns)
-            if field.ref:
-                fname = field.reverse_name or cls._snake_name_
-                if fname in field.type.fields and field.type.fields[fname].type != cls:
-                    raise QuazyFieldNameError(f'Cannot create Many field in table `{field.type.__name__}` with name `{fname}`, it is associated with table `{field.type.fields[fname].type.__name__}`. Set different `reverse_name`.')
-                field.type._many_fields_[fname] = cls
-                setattr(field.type, fname, set())
+            field: DBField = cls._fields_[name]
+            if cls.resolve_type(t, field, globalns):
+                setattr(cls, name, list())
+                del cls._fields_[name]
 
         # eval owner
         if isinstance(cls._owner_, str):
-            base_cls: DBTable = getattr(sys.modules[cls.__module__], cls._owner_)
+            base_cls: Type[DBTable] = getattr(sys.modules[cls.__module__], cls._owner_)
             # field_name = camel2snake(cls.__name__)
             field = DBField()
             field.set_name(base_cls._table_)
             field.type = base_cls
             field.ref = True
             field.required = True
-            cls._owner_ = field
-            cls.fields[field.column] = field
+            cls._owner_ = base_cls
+            cls._fields_[field.column] = field
 
         # resolve types for subclasses
         for name, t in vars(cls).items():
-            if inspect.isclass(t) and issubclass(t, DBTable):
+            if name != '_owner_' and inspect.isclass(t) and issubclass(t, DBTable):
                 cls._subtables_[t._snake_name_] = t
                 t._schema_ = cls._schema_
                 t.resolve_types(globalns)
 
     @classmethod
-    def resolve_type(cls, t: Union[Type, typing._GenericAlias], field: DBField, globalns):
+    def resolve_type(cls, t: Union[Type, typing._GenericAlias], field: DBField, globalns) -> bool | None:
         if t in KNOWN_TYPES:
             # Base type
             field.type = t
@@ -532,9 +576,20 @@ class DBTable(metaclass=MetaTable):
                 field.required = False
                 DBTable.resolve_type(t.__args__[0], field, globalns)
                 return
-            elif t.__origin__ is set and len(t.__args__) == 1:
+            elif t.__origin__ in [Many, ManyToMany] and len(t.__args__) == 1:
                 # resolve Many later
-                return
+                t2 = t.__args__[0]
+                if isinstance(t2, typing.ForwardRef):
+                    field_type = t2._evaluate(globalns, {})
+                elif inspect.isclass(t2) and issubclass(t2, DBTable):
+                    field_type = t2
+                else:
+                    raise QuazyFieldTypeError(f'Many type should be reference to other DBTable')
+                if t.__origin__ is Many:
+                    cls._many_fields_[field.name] = DBManyField(field_type, field.reverse_name)
+                else:
+                    cls._many_to_many_fields_[field.name] = DBManyToManyField(field_type, field.reverse_name)
+                return True
             elif t.__origin__ is FieldCID:
                 # Field CID declaration
                 field.type = t.__args__[0] if t.__args__ else str
@@ -554,70 +609,83 @@ class DBTable(metaclass=MetaTable):
         raise QuazyFieldTypeError(f'Type {t} is not supported as field type')
 
     @classmethod
-    def resolve_many_types(cls, globalns):
-        if cls._many_resolved_:
-            return
-
-        # eval annotations
-        for name, t in typing.get_type_hints(cls, globalns, globals()).items():
-            if name not in cls.fields or cls.fields[name].type is not None:
-                continue
-            field: DBField = cls.fields[name]
-            if cls.resolve_many(t, field, globalns):
-                del cls.fields[name]
-
-        # eval owner
-        if isinstance(cls._owner_, str):
-            base_cls: DBTable = getattr(sys.modules[cls.__module__], cls._owner_)
-            # field_name = camel2snake(cls.__name__)
-            field = DBField()
-            field.set_name(base_cls._table_)
-            field.type = base_cls
-            field.ref = True
-            field.required = True
-            cls._owner_ = field
-            cls.fields[field.column] = field
-
-        cls._many_resolved_ = True
-
-    @classmethod
-    def resolve_many(cls, t: Union[Type, typing._GenericAlias], field: DBField, globalns) -> bool:
-        if hasattr(t, '__origin__'):  # Union cannot be used with isinstance()
-            if t.__origin__ is set and len(t.__args__) == 1:
-                # 'Many' annotation (HERE)
-                #field.many_field = True
-                #DBTable.resolve_type(t.__args__[0], field, globalns)
-                t2 = t.__args__[0]
-                if isinstance(t2, typing.ForwardRef):
-                    t3 = t2._evaluate(globalns, {})
-                    #cls._subtables_[field.name] = t3
-                    cls._many_fields_[field.name] = t3
-                elif inspect.isclass(t2):
-                    #cls._subtables_[field.name] = t2
-                    cls._many_fields_[field.name] = t2
+    def resolve_types_many(cls, add_middle_table: Callable[[Type[DBTable]], None]):
+        # eval refs
+        for name, field in cls._fields_.items():
+            if field.ref:
+                rev_name = field.reverse_name or cls._snake_name_
+                if rev_name in field.type._many_fields_:
+                    if field.type._many_fields_[rev_name].source_table is not cls:
+                        raise QuazyFieldNameError(f'Cannot reuse Many field in table `{field.type.__name__}` with name `{rev_name}`, it is associated with table `{field.type._many_fields_[rev_name].source_table.__name__}`. Set different `reverse_name`.')
+                    field.type._many_fields_[rev_name].source_field = name
                 else:
-                    raise QuazyFieldTypeError(f'Use `DBTable` subclass with many field instead of {t2}')
-                return True
-        raise QuazyFieldTypeError(f'Type `{t}` is not supported as field type')
+                    field.type._many_fields_[rev_name] = DBManyField(cls, name)
+
+        # check Many fields connected
+        for name, field in cls._many_fields_.items():
+            if not field.source_field or field.source_field not in field.source_table._fields_:
+                raise QuazyFieldTypeError(f'Cannot find reference from table `{field.source_table.__name__}` to table `{cls.__name__}` to connect with Many field `{name}`. Add field to source table or change field type to `ManyToMany`')
+
+        # check and connect ManyToMany fields
+        for name, field in cls._many_to_many_fields_.items():
+            if field.middle_table:
+                continue
+
+            middle_table_name = "{}{}".format(cls.__qualname__, name.capitalize())
+            middle_table_inner_name = "{}_{}".format(cls._table_, name)
+            rev_name = field.source_field or cls._snake_name_
+            if rev_name in field.source_table._many_to_many_fields_ and field.source_table._many_to_many_fields_[rev_name].source_table is not cls:
+                raise QuazyFieldNameError(f'Cannot reuse ManyToMany field in table `{field.source_table.__name__}` with name `{rev_name}`, it is associated with table `{field.source_table._many_to_many_fields_[rev_name].source_table.__name__}`. Set different `reverse_name`.')
+
+            f1 = DBField(field.source_table._table_, indexed=True)
+            f1.set_name(f1.column)
+            f1.type = field.source_table
+            f1.ref = True
+            f2 = DBField(cls._table_, indexed=True)
+            f2.set_name(f2.column)
+            f2.type = cls
+            f2.ref = True
+
+            TableClass: Type[DBTable] = typing.cast(typing.Type[DBTable],
+                type(middle_table_name, (DBTable,), {
+                    '__qualname__': middle_table_name,
+                    '__module__': cls.__module__,
+                    '__annotations__': {
+                        f1.name: f1.type,
+                        f2.name: f2.type
+                    },
+                    '_table_': middle_table_inner_name,
+                    '_types_resolved_': True,
+                    f1.name: f1,
+                    f2.name: f2,
+                }))
+            add_middle_table(TableClass)
+
+            field.middle_table = TableClass
+            field.source_field = f2.column
+            field.source_table._many_to_many_fields_[rev_name].middle_table = TableClass
+            field.source_table._many_to_many_fields_[rev_name].source_field = f1.column
 
     def __init__(self, **initial):
         self._modified_fields_: Set[str] = set()
-        self.id: Union[None, int, UUID] = None
+        #self.id: Union[None, int, UUID] = None
         #for field_name, field in self.fields.items():
         #    if field.many_field:
         #        setattr(self, field_name, set())
         for field_name, field in self._many_fields_.items():
             setattr(self, field_name, set())
         for k, v in initial.items():
-            if k not in self.fields:
-                raise QuazyFieldNameError(f'Wrong field name {k} in new instance of {self._table_}')
+            if k not in self._fields_ and k not in self._many_fields_ and k not in self._many_to_many_fields_:
+                raise QuazyFieldNameError(f'Wrong field name `{k}` in new instance of `{self.__class__.__name__}`')
             # TODO: validate types
             setattr(self, k, v)
+        if self._pk_.name not in initial:
+            self.pk = None
         for field_name in self._subtables_:
-            setattr(self, field_name, set())
+            setattr(self, field_name, list())
 
     def __setattr__(self, key, value):
-        if key in self.fields:
+        if key in self._fields_:
             self._modified_fields_.add(key)
         return super().__setattr__(key, value)
 
@@ -631,7 +699,7 @@ class DBTable(metaclass=MetaTable):
             'just_for_typing': cls._just_for_typing_,
             'extendable': cls._extendable_,
             'discriminator': cls._discriminator_,
-            'fields': {name: f._dump_schema() for name, f in cls.fields.items()},
+            'fields': {name: f._dump_schema() for name, f in cls._fields_.items()},
         }
 
     @classmethod
@@ -648,13 +716,21 @@ class DBTable(metaclass=MetaTable):
             '_discriminator_': state['discriminator'],
             **fields
         }))
-        for name, f in TableClass.fields.items():
+        for name, f in TableClass._fields_.items():
             if f.pk:
                 TableClass._pk_ = f
             elif f.cid:
                 TableClass._cid_ = f
 
         return TableClass
+
+    @property
+    def pk(self):
+        return getattr(self, self._pk_.name)
+
+    @pk.setter
+    def pk(self, value):
+        setattr(self, self._pk_.name, value)
 
     def _before_update(self, db: DBFactory):
         pass

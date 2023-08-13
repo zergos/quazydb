@@ -127,7 +127,7 @@ class Translator:
     def create_table(cls, table: Type[DBTable]) -> str:
         cols = ', '.join(
             f'"{field.column}" {cls.type_name(field)} {cls.column_options(field)}'
-            for field in table.fields.values()
+            for field in table._fields_.values()
             #if not field.many_field and not field.prop
             if not field.prop
         )
@@ -173,7 +173,7 @@ class Translator:
             actions = 'ON DELETE CASCADE'
         else:
             actions = 'ON DELETE SET NULL'
-        res = f'ALTER TABLE {cls.table_name(table)} ADD CONSTRAINT fk_{table._table_}_{field.column} FOREIGN KEY ({field.column}) REFERENCES {cls.table_name(field.type)} ("{field.type._pk_.column}") {actions}'
+        res = f'ALTER TABLE {cls.table_name(table)} ADD CONSTRAINT fk_{table._table_}_{field.column} FOREIGN KEY ("{field.column}") REFERENCES {cls.table_name(field.type)} ("{field.type._pk_.column}") {actions}'
         return res
 
     @classmethod
@@ -406,3 +406,28 @@ class Translator:
             schemaname = '{table._schema_}' AND 
             tablename  = '{table._table_}'
         )"""
+
+    @classmethod
+    def select_many_indices(cls, middle_table: Type[DBTable], primary_index: str, secondary_index: str) -> str:
+        return f'''SELECT array_agg("{secondary_index}") FROM
+            {cls.table_name(middle_table)}
+        WHERE
+            "{primary_index}" = %(value)s
+        '''
+
+    @classmethod
+    def delete_many_indices(cls, middle_table: Type[DBTable], primary_index: str, secondary_index: str) -> str:
+        return f'''DELETE FROM
+            {cls.table_name(middle_table)}
+        WHERE
+            "{primary_index}" = %(value)s AND
+            "{secondary_index}" in %(indices)s
+        '''
+
+    @classmethod
+    def insert_many_index(cls, middle_table: Type[DBTable], primary_index: str, secondary_index: str) -> str:
+        return f'''INSERT INTO
+            {cls.table_name(middle_table)} ("{primary_index}", "{secondary_index}")
+        VALUES
+            (%(value)s, %(index)s)
+        '''
