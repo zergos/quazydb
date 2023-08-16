@@ -1,3 +1,4 @@
+import inspect
 import json
 import os
 import typing
@@ -67,18 +68,18 @@ class MigrationType(StrEnum):
 
 class MigrationCommand(NamedTuple):
     command: MigrationType
-    subject: Any
+    subject: tuple[Any, ...]
 
     def __str__(self):
         match self.command:
             case MigrationType.INITIAL:
                 return f"Initial migration"
             case MigrationType.ADD_TABLE:
-                return f"Add table {self.subject.__qualname__}"
+                return f"Add table {self.subject[0].__qualname__}"
             case MigrationType.DELETE_TABLE:
-                return f"Delete table {self.subject.__qualname__}"
+                return f"Delete table {self.subject[0].__qualname__}"
             case MigrationType.RENAME_TABLE:
-                return f"Raname table {self.subject[0].__qualname__} to {self.subject[1].__qualname__}"
+                return f"Rename table {self.subject[1]} to {self.subject[2]}"
             case MigrationType.ADD_FIELD:
                 return f"Add field {self.subject[1].name} to table {self.subject[0].__qualname__}"
             case MigrationType.DELETE_FIELD:
@@ -96,26 +97,28 @@ class MigrationCommand(NamedTuple):
         args = []
         if self.subject:
             for arg in self.subject:
-                if issubclass(arg, DBTable):
-                    args.append(('DBTable', arg._dump_schema()))
+                if inspect.isclass(arg) and issubclass(arg, DBTable):
+                    args.append(('DBTable', arg.__qualname__))
                 elif isinstance(arg, DBField):
-                    args.append(('DBField', arg._dump_schema()))
+                    args.append(('DBField', arg.name))
                 elif isinstance(arg, str):
                     args.append(('str', arg))
                 elif type(arg) is bool:
                     args.append(('bool', str(arg)))
+                elif arg is None:
+                    pass
                 else:
                     raise QuazyError('Wrong arg type in command argument')
         return {'command': self.command, 'subject': args}
 
     @classmethod
-    def load(cls, data: dict[str, typing.Any]):
+    def load(cls, data: dict[str, typing.Any], tables: dict[str, Type[DBTable]]):
         args = []
         for arg in data['subject']:
             if arg[0] == 'DBTable':
-                args.append(DBTable._load_schema(arg[1]))
+                args.append(tables[arg[1]])
             elif arg[0] == 'DBField':
-                args.append(DBField._load_schema(arg[1]))
+                args.append(args[0]._fields_[arg[0]])
             elif arg[0] == 'str':
                 args.append(arg)
             elif arg[0] == 'bool':
@@ -138,7 +141,7 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
         .fetchone()
 
     if not last_migration:
-        return [MigrationCommand(MigrationType.INITIAL, None)], db.all_tables(schema)
+        return [MigrationCommand(MigrationType.INITIAL, (None, ))], db.all_tables(schema)
 
     # load last schema
     tables_old: dict[str, Type[DBTable]] = {}
@@ -147,8 +150,11 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
         SomeTable: Type[DBTable] = DBTable._load_schema(chunk)
         tables_old |= {SomeTable.__qualname__: SomeTable}
 
+    globalns = tables_old.copy()
     for t in list(tables_old.values()):
-        t.resolve_types(tables_old)
+        t.resolve_types(globalns)
+    for t in list(tables_old.values()):
+        t.resolve_types_many(lambda _: None)
 
     # get tables from specified module
     all_tables = db.all_tables(schema)
@@ -156,7 +162,7 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
     # extend by related types from other schemas
     for t in all_tables.copy():
         for f in t._fields_.values():
-            if f.ref:
+            if f.ref and f.type._schema_ != schema:
                 fields = {fname: field for fname, field in f.type._fields_.items() if field.pk or field.cid}
                 annotations = {fname: annot for fname, annot in f.type.__annotations__.items() if fname in fields}
                 ShortClass = typing.cast(typing.Type[DBTable], type(f.type.__qualname__, (DBTable, ), {
@@ -170,7 +176,7 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
                     '_just_for_typing_': True,
                     **fields
                 }))
-                all_tables.add(ShortClass)
+                all_tables.append(ShortClass)
 
     tables_new = {t.__qualname__: t for t in all_tables}
 
@@ -185,15 +191,15 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
     tables_to_rename = []
     for pair in rename_list:
         if pair[0] in tables_to_delete and pair[1] in tables_to_add:
-            tables_to_rename.append((tables_old[pair[0]], tables_new[pair[1]]))
+            tables_to_rename.append((tables_old._schema_, pair[0], pair[1]))
             del tables_to_delete[pair[0]]
             del tables_to_add[pair[1]]
 
     # Generate commands
-    for name, t in tables_to_add:
-        commands.append(MigrationCommand(MigrationType.ADD_TABLE, t))
-    for name, t in tables_to_delete:
-        commands.append(MigrationCommand(MigrationType.DELETE_TABLE, t))
+    for name, t in tables_to_add.items():
+        commands.append(MigrationCommand(MigrationType.ADD_TABLE, (t, )))
+    for name, t in tables_to_delete.items():
+        commands.append(MigrationCommand(MigrationType.DELETE_TABLE, (t, )))
     for pair in tables_to_rename:
         commands.append(MigrationCommand(MigrationType.RENAME_TABLE, pair))
 
@@ -278,16 +284,16 @@ def apply_changes(db: DBFactory, schema: str, commands: list[MigrationCommand], 
                 print(f"Apply command {command}... ", end='')
                 match command.command:
                     case MigrationType.ADD_TABLE:
-                        conn.execute(trans.create_table(command.subject))
-                        for field in command.subject._fields_.values():
+                        conn.execute(trans.create_table(command.subject[0]))
+                        for field in command.subject[0]._fields_.values():
                             if field.ref:
-                                conn.execute(trans.add_reference(command.subject, field))
+                                conn.execute(trans.add_reference(command.subject[0], field))
 
                     case MigrationType.DELETE_TABLE:
-                        for field in command.subject._fields_.values():
+                        for field in command.subject[0]._fields_.values():
                             if field.ref:
-                                conn.execute(trans.drop_reference(command.subject, field))
-                        conn.execute(trans.drop_table(command.subject))
+                                conn.execute(trans.drop_reference(command.subject[0], field))
+                        conn.execute(trans.drop_table(command.subject[0]))
 
                     case MigrationType.RENAME_TABLE:
                         conn.execute(trans.rename_table(*command.subject))

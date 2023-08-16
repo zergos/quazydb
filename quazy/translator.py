@@ -101,6 +101,11 @@ class Translator:
         return f'"{schema}{table._table_}"'
 
     @classmethod
+    def table_name2(cls, schema: str, table_name: str) -> str:
+        schema =  schema + '"."' if schema else ''
+        return f'"{schema}{table_name}'
+
+    @classmethod
     def subquery_name(cls, subquery: DBQuery) -> str:
         return subquery.name
 
@@ -161,8 +166,8 @@ class Translator:
         return res
 
     @classmethod
-    def rename_table(cls, old_table: Type[DBTable], new_table: Type[DBTable]) -> str:
-        res = f"ALTER TABLE {cls.table_name(old_table)} RENAME TO {cls.table_name(new_table)}"
+    def rename_table(cls, schema: str, old_table_name: str, new_table_name: str) -> str:
+        res = f"ALTER TABLE {cls.table_name2(schema, old_table_name)} RENAME TO {cls.table_name2(schema, new_table_name)}"
         return res
 
     @classmethod

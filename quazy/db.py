@@ -41,7 +41,7 @@ class DBFactory:
 
     def __init__(self, connection_pool, debug_mode: bool = False):
         self._connection_pool: psycopg_pool.ConnectionPool = connection_pool
-        self._tables: set[Type[DBTable]] = set()
+        self._tables: list[Type[DBTable]] = list()
         self._debug_mode = debug_mode
 
     @staticmethod
@@ -58,7 +58,8 @@ class DBFactory:
     def use(self, cls: Type[DBTable], schema: str = 'public'):
         if not cls._schema_:
             cls._schema_ = schema
-        self._tables.add(cls)
+        if cls not in self._tables:
+            self._tables.append(cls)
         setattr(self, cls.__name__, cls)
         return cls
 
@@ -73,10 +74,10 @@ class DBFactory:
             globalns = sys._getframe(1).f_locals
         if s := globalns.get('_SCHEMA_'):
             schema = s
-        tables: set[Type[DBTable]] = set()
+        tables: list[Type[DBTable]] = list()
         for v in globalns.values():
             if inspect.isclass(v) and v is not DBTable and issubclass(v, DBTable) and not v._meta_:
-                tables.add(v)
+                tables.append(v)
                 self.use(v, schema)
         for table in tables:
             table.resolve_types(globalns)
@@ -119,11 +120,11 @@ class DBFactory:
                 for table in tables:
                     conn.execute(f'DROP TABLE {table} CASCADE')
 
-    def all_tables(self, schema: str = None) -> set[typing.Type[DBTable]]:
+    def all_tables(self, schema: str = None) -> list[typing.Type[DBTable]]:
 
         all_tables = self._tables.copy()
         for table in self._tables:
-            all_tables = all_tables.union(table._subtables_.values())
+            all_tables.extend(table._subtables_.values())
 
         ext: Dict[str, List[Type[DBTable]]] = defaultdict(list)
         for t in all_tables.copy():
@@ -166,7 +167,7 @@ class DBFactory:
                 '_types_resolved_': True,
                 **fields
             }))
-            all_tables.add(TableClass)
+            all_tables.append(TableClass)
 
         return all_tables
 
@@ -609,7 +610,7 @@ class DBTable(metaclass=MetaTable):
         raise QuazyFieldTypeError(f'Type {t} is not supported as field type')
 
     @classmethod
-    def resolve_types_many(cls, add_middle_table: Callable[[Type[DBTable]], None]):
+    def resolve_types_many(cls, add_middle_table: Callable[[Type[DBTable]], Any]):
         # eval refs
         for name, field in cls._fields_.items():
             if field.ref:
@@ -691,16 +692,19 @@ class DBTable(metaclass=MetaTable):
 
     @classmethod
     def _dump_schema(cls):
-        return {
+        res = {
             'qualname': cls.__qualname__,
             'module': cls.__module__,
             'table': cls._table_,
             'schema': cls._schema_,
-            'just_for_typing': cls._just_for_typing_,
             'extendable': cls._extendable_,
-            'discriminator': cls._discriminator_,
             'fields': {name: f._dump_schema() for name, f in cls._fields_.items()},
         }
+        if cls._discriminator_:
+            res['discriminator'] = cls._discriminator_
+        if cls._just_for_typing_:
+            res['just_for_typing'] = cls._just_for_typing_
+        return res
 
     @classmethod
     def _load_schema(cls, state):
@@ -711,9 +715,9 @@ class DBTable(metaclass=MetaTable):
             '__annotations__': {name: f._pre_type for name, f in fields.items()},
             '_table_': state['table'],
             '_schema_': state['schema'],
-            '_just_for_typing_': state['just_for_typing'],
+            '_just_for_typing_': state.get('just_for_typing', False),
             '_extendable_': state['extendable'],
-            '_discriminator_': state['discriminator'],
+            '_discriminator_': state.get('discriminator'),
             **fields
         }))
         for name, f in TableClass._fields_.items():
