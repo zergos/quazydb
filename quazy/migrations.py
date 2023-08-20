@@ -31,6 +31,7 @@ class Migration(DBTable):
     tables: str
     commands: str
     comments: str
+    detached: bool = False
 
 
 def check_migrations(db: DBFactory) -> bool:
@@ -128,7 +129,7 @@ class MigrationCommand(NamedTuple):
         return cls(command=data['command'], subject=tuple(args))
 
 
-def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] | None = None) -> tuple[list[MigrationCommand], set[Type[DBTable]]]:
+def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] | None = None) -> tuple[list[MigrationCommand], list[Type[DBTable]]]:
     db.use_module(__name__)
 
     commands: list[MigrationCommand] = []
@@ -254,7 +255,7 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
     return commands, db.all_tables(schema)
 
 
-def apply_changes(db: DBFactory, schema: str, commands: list[MigrationCommand], all_tables: set[Type[DBTable]], comments: str = "", debug: bool = False):
+def apply_changes(db: DBFactory, schema: str, commands: list[MigrationCommand], all_tables: list[Type[DBTable]], comments: str = "", debug: bool = False):
 
     if not commands:
         return

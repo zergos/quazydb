@@ -353,20 +353,18 @@ class DBField:
             self.ux.title = self.name
 
     def _dump_schema(self) -> Dict[str, Any]:
-        return {
+        res = {
             'name': self.name,
             'column': self.column,
             'type': db_type_name(self.type) if not self.ref else self.type.__name__,
-            'pk': self.pk,
-            'cid': self.cid,
-            'ref': self.ref,
-            'body': self.body,
-            'prop': self.prop,
-            'required': self.required,
-            'indexed': self.indexed,
-            'unique': self.unique,
-            'default_sql': self.default_sql,
         }
+
+        for col in 'pk cid ref body prop required indexed unique'.split():
+            if val := getattr(self, col):
+                res[col] = val
+        if val := self.default_sql:
+            res['default_sql'] = val
+        return res
 
     @classmethod
     def _load_schema(cls, state: Dict[str, Any]) -> DBField:
@@ -448,28 +446,34 @@ class MetaTable(type):
         for name, t in attrs.get('__annotations__', {}).items():  # type: str, str
             if name.startswith('_'):
                 continue
-            field: DBField = attrs.pop(name, DBField())
-            field.set_name(name)
-            if not field.type:
+            field = attrs.pop(name, DBField())
+            if isinstance(field, DBField):
+                field.set_name(name)
+                if not field.type:
+                    field.type = t
+                if field.pk:
+                    has_pk = True
+                    attrs['_pk_'] = field
+                elif t is FieldCID or field.cid:
+                    # check CID
+                    if not attrs.get('_extendable_'):
+                        raise QuazyFieldTypeError(f'Table `{attrs["__qualname__"]}` is not declared with _extendable_ attribute')
+                    elif attrs.get('_cid_'):
+                        raise QuazyFieldTypeError(f'Table `{attrs["__qualname__"]}` has CID field already inherited from extendable')
+
+                    field.cid = True
+                    attrs['_cid_'] = field
+                elif t is FieldBody or field.body:
+                    if attrs.get('_body_'):
+                        raise QuazyFieldTypeError(f'Table `{attrs["__qualname__"]}` has body field already')
+
+                    attrs['_body_'] = field
+            else:
+                field = DBField(default=field)
+                field.set_name(name)
                 field.type = t
+
             fields[name] = field
-            if field.pk:
-                has_pk = True
-                attrs['_pk_'] = field
-            elif t is FieldCID or field.cid:
-                # check CID
-                if not attrs.get('_extendable_'):
-                    raise QuazyFieldTypeError(f'Table `{attrs["__qualname__"]}` is not declared with _extendable_ attribute')
-                elif attrs.get('_cid_'):
-                    raise QuazyFieldTypeError(f'Table `{attrs["__qualname__"]}` has CID field already inherited from extendable')
-
-                field.cid = True
-                attrs['_cid_'] = field
-            elif t is FieldBody or field.body:
-                if attrs.get('_body_'):
-                    raise QuazyFieldTypeError(f'Table `{attrs["__qualname__"]}` has body field already')
-
-                attrs['_body_'] = field
 
         # check seed proper declaration
         if attrs.get('_cid_') and not attrs.get('_extendable_'):
@@ -697,13 +701,11 @@ class DBTable(metaclass=MetaTable):
             'module': cls.__module__,
             'table': cls._table_,
             'schema': cls._schema_,
-            'extendable': cls._extendable_,
             'fields': {name: f._dump_schema() for name, f in cls._fields_.items()},
         }
-        if cls._discriminator_:
-            res['discriminator'] = cls._discriminator_
-        if cls._just_for_typing_:
-            res['just_for_typing'] = cls._just_for_typing_
+        for col in 'extendable discriminator just_for_typing'.split():
+            if val := getattr(cls, f"_{col}_"):
+                res[col] = val
         return res
 
     @classmethod
@@ -716,7 +718,7 @@ class DBTable(metaclass=MetaTable):
             '_table_': state['table'],
             '_schema_': state['schema'],
             '_just_for_typing_': state.get('just_for_typing', False),
-            '_extendable_': state['extendable'],
+            '_extendable_': state.get('extendable', False),
             '_discriminator_': state.get('discriminator'),
             **fields
         }))
