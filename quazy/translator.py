@@ -37,7 +37,7 @@ class Translator:
         # TODO: enum
         # TODO: array
         if field.ref:
-            return cls.type_name(field.type._pk_, False)
+            return cls.type_name(field.type.DB.pk, False)
         raise QuazyTranslatorException(f'Unsupported DB column type {field.name} ({field.type})')
 
     @classmethod
@@ -47,7 +47,7 @@ class Translator:
         if field.type in (int, float, bool, bytes, UUID):
             return f'{value}::text'
         if field.ref:
-            return cls.serialize(field.type._pk_, value)
+            return cls.serialize(field.type.DB.pk, value)
         if field.type in (datetime, timedelta):
             return f'CAST(extract(epoch from {value}) as integer)'
         if field.type in (date, time):
@@ -61,7 +61,7 @@ class Translator:
         if field.type in (int, float, bool, bytes, UUID):
             return f'CAST({field_path} as {cls.type_name(field)})'
         if field.ref:
-            return cls.deserialize(field.type._pk_, field_path)
+            return cls.deserialize(field.type.DB.pk, field_path)
         if field.type is datetime:
             return f'to_timestamp({field_path})'
         if field.type is date:
@@ -97,8 +97,8 @@ class Translator:
 
     @classmethod
     def table_name(cls, table: Type[DBTable]) -> str:
-        schema = table._schema_ + '"."' if table._schema_ else ''
-        return f'"{schema}{table._table_}"'
+        schema = table.DB.schema + '"."' if table.DB.schema else ''
+        return f'"{schema}{table.DB.table}"'
 
     @classmethod
     def table_name2(cls, schema: str, table_name: str) -> str:
@@ -112,11 +112,11 @@ class Translator:
     @classmethod
     def create_index(cls, table: Type[DBTable], field: DBField) -> str:
         unique = 'UNIQUE' if field.unique else ''
-        return f'CREATE {unique} INDEX IF NOT EXISTS {table._table_}_{field.column}_index ON {cls.table_name(table)} ("{field.column}")'
+        return f'CREATE {unique} INDEX IF NOT EXISTS {table.DB.table}_{field.column}_index ON {cls.table_name(table)} ("{field.column}")'
 
     @classmethod
     def drop_index(cls, table: Type[DBTable], field: DBField) -> str:
-        res = f'DROP INDEX {table._table_}_{field.column}_index'
+        res = f'DROP INDEX {table.DB.table}_{field.column}_index'
         return res
 
     @classmethod
@@ -132,7 +132,7 @@ class Translator:
     def create_table(cls, table: Type[DBTable]) -> str:
         cols = ', '.join(
             f'"{field.column}" {cls.type_name(field)} {cls.column_options(field)}'
-            for field in table._fields_.values()
+            for field in table.DB.fields.values()
             #if not field.many_field and not field.prop
             if not field.prop
         )
@@ -178,14 +178,14 @@ class Translator:
             actions = 'ON DELETE CASCADE'
         else:
             actions = 'ON DELETE SET NULL'
-        res = f'ALTER TABLE {cls.table_name(table)} ADD CONSTRAINT fk_{table._table_}_{field.column} FOREIGN KEY ("{field.column}") REFERENCES {cls.table_name(field.type)} ("{field.type._pk_.column}") {actions}'
+        res = f'ALTER TABLE {cls.table_name(table)} ADD CONSTRAINT fk_{table.DB.table}_{field.column} FOREIGN KEY ("{field.column}") REFERENCES {cls.table_name(field.type)} ("{field.type.DB.pk.column}") {actions}'
         return res
 
     @classmethod
     def drop_reference(cls, table: Type[DBTable], field: DBField) -> str:
         if not field.ref:
             raise QuazyTranslatorException(f'Field {field.name} is not reference')
-        res = f'ALTER TABLE {cls.table_name(table)} DROP CONSTRAINT fk_{table._table_}_{field.column}'
+        res = f'ALTER TABLE {cls.table_name(table)} DROP CONSTRAINT fk_{table.DB.table}_{field.column}'
         return res
 
     @classmethod
@@ -203,7 +203,7 @@ class Translator:
         if field.type is dict:
             return json.dumps(value)
         if field.ref:
-            return getattr(value, field.type._pk_.name)
+            return getattr(value, field.type.DB.pk.name)
         return value
 
     @classmethod
@@ -255,10 +255,10 @@ class Translator:
         columns = ','.join(f'"{field.column}"' for field, _ in fields if not field.default_sql and not field.prop and not field.body)
         row = ','.join(sql_values)
 
-        if table._body_:
+        if table.DB.body:
             if columns:
                 columns += ','
-            columns += table._body_.column
+            columns += table.DB.body.column
             if body_values:
                 body_value = ', '.join(f"'{name}',{value}" for name, value in body_values.items())
                 body_value = f'json_build_object({body_value})'
@@ -268,7 +268,7 @@ class Translator:
                 row += ','
             row += body_value
 
-        res = f'INSERT INTO {cls.table_name(table)} ({columns}) VALUES ({row}) RETURNING "{table._pk_.column}"'
+        res = f'INSERT INTO {cls.table_name(table)} ({columns}) VALUES ({row}) RETURNING "{table.DB.pk.column}"'
         return res, values
 
     @classmethod
@@ -300,13 +300,13 @@ class Translator:
                 props.append("'{}',{}".format(field[0].column, cls.serialize(field[0], sql_value)))
 
         sets_sql = ', '.join(sets)
-        if table._body_ and props:
+        if table.DB.body and props:
             if sets_sql:
                 sets_sql += ', '
             body_value = ', '.join(props)
-            sets_sql += f'"{table._body_.column}" = "{table._body_.column}" || json_build_object({body_value})'
+            sets_sql += f'"{table.DB.body.column}" = "{table.DB.body.column}" || json_build_object({body_value})'
 
-        res = f'UPDATE {cls.table_name(table)} SET {sets_sql} WHERE "{table._pk_.column}" = %(v1)s'
+        res = f'UPDATE {cls.table_name(table)} SET {sets_sql} WHERE "{table.DB.pk.column}" = %(v1)s'
         return res, values
 
     @classmethod
@@ -408,8 +408,8 @@ class Translator:
         SELECT FROM 
             pg_tables
         WHERE 
-            schemaname = '{table._schema_}' AND 
-            tablename  = '{table._table_}'
+            schemaname = '{table.DB.schema}' AND 
+            tablename  = '{table.DB.table}'
         )"""
 
     @classmethod

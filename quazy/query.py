@@ -24,7 +24,7 @@ class DBQueryField:
     def __init__(self, query: DBQuery, table: Type[DBTable], path: str = None):
         self._query: DBQuery = query
         self._table: Type[DBTable] = table
-        self._path: str = path or table._snake_name_
+        self._path: str = path or table.DB.snake_name
 
     def __getattr__(self, item):
         if item.startswith('_'):
@@ -33,26 +33,28 @@ class DBQueryField:
         if self._path not in self._query.joins:
             self._query.joins[self._path] = DBJoin(self._table, DBJoinKind.SOURCE)
 
-        if item in self._table._fields_:
-            field: DBField = self._table._fields_[item]
-            if not field.prop:
-                field_path = f'{self._path}.{item}'
-            elif isinstance(field.type, dict):
+        if item in self._table.DB.fields:
+            field: DBField = self._table.DB.fields[item]
+            if isinstance(field.type, dict):
                 field_path = f"{self._path}->'{item}'"
             else:
-                field_path = self._query.db._trans.deserialize(field, f"{self._path}->>'{item}'")
-            if field.ref:
-                join_path = f'{self._path}__{field.type._snake_name_}'
-                if join_path not in self._query.joins:
-                    self._query.joins[join_path] = DBJoin(field.type, DBJoinKind.LEFT, f'{field_path} = {join_path}.{field.type._pk_.name}')
-                return DBQueryField(self._query, field.type, join_path)
+                if not field.prop:
+                    field_path = f'{self._path}.{item}'
+                else:
+                    field_path = self._query.db._trans.deserialize(field, f"{self._path}->>'{item}'")
+
+                if field.ref:
+                    join_path = f'{self._path}__{field.type.DB.snake_name}'
+                    if join_path not in self._query.joins:
+                        self._query.joins[join_path] = DBJoin(field.type, DBJoinKind.LEFT, f'{field_path} = {join_path}.{field.type.DB.pk.name}')
+                    return DBQueryField(self._query, field.type, join_path)
             return DBSQL(self._query, f'{field_path}')
 
-        elif table := self._table._subtables_.get(item) or self._table._many_fields_.get(item):
-            join_path = f'{self._path}__{table._snake_name_}'
+        elif table := self._table.DB.subtables.get(item) or self._table.DB.many_fields.get(item):
+            join_path = f'{self._path}__{table.DB.snake_name}'
             if join_path not in self._query.joins:
                 self._query.joins[join_path] = DBJoin(table, DBJoinKind.LEFT,
-                                                  f'{self._path}.{self._table._pk_.name} = {join_path}.{self._table._table_}')
+                                                  f'{self._path}.{self._table.DB.pk.name} = {join_path}.{self._table.DB.table}')
             return DBQueryField(self._query, table, join_path)
 
         raise QuazyFieldNameError(f'field {item} not found in {self._table.__name__}')
@@ -61,13 +63,13 @@ class DBQueryField:
         return self._path
 
     def __eq__(self, other) -> DBSQL:
-        return typing.cast(DBSQL, getattr(self, self._table._pk_.name)) == other
+        return typing.cast(DBSQL, getattr(self, self._table.DB.pk.name)) == other
 
     def __ne__(self, other) -> DBSQL:
-        return typing.cast(DBSQL, getattr(self, self._table._pk_.name)) != other
+        return typing.cast(DBSQL, getattr(self, self._table.DB.pk.name)) != other
 
     def __contains__(self, item) -> DBSQL:
-        return typing.cast(DBSQL, getattr(self, self._table._pk_.name) in item)
+        return typing.cast(DBSQL, getattr(self, self._table.DB.pk.name) in item)
 
 
 class QQueryField:
@@ -313,10 +315,10 @@ class DBQuery:
 
         self.scheme: Union[SimpleNamespace, DBQueryField] = DBScheme()
         for table in self.db._tables:
-            setattr(self.scheme, table._snake_name_, DBQueryField(self, table))
+            setattr(self.scheme, table.DB.snake_name, DBQueryField(self, table))
 
         if table_class is not None:
-            self.joins[table_class._snake_name_] = DBJoin(table_class, DBJoinKind.SOURCE)
+            self.joins[table_class.DB.snake_name] = DBJoin(table_class, DBJoinKind.SOURCE)
             table_space = DBQueryField(self, table_class)
             setattr(table_space, '_db', self.scheme)
             self.scheme = table_space
@@ -392,7 +394,7 @@ class DBQuery:
         if value is None:
             return DBSQL(self, 'NULL')
         if isinstance(value, DBTable):
-            value = getattr(value, value._pk_.name)
+            value = value.pk
         if value in self.args.values():
             key = list(self.args.keys())[list(self.args.values()).index(value)]
             return DBSQL(self, f'%({key})s', aggregated)
@@ -514,7 +516,7 @@ class DBQuery:
             if not self.fetch_objects:
                 raise QuazyError('No fields selected')
             else:
-                for field_name in self.table_class._fields_.keys():
+                for field_name in self.table_class.DB.fields.keys():
                     self.fields[field_name] = getattr(self.scheme, field_name)
 
     @contextmanager

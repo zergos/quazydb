@@ -5,7 +5,7 @@ import typing
 try:
     from enum import StrEnum
 except ImportError:
-    from strenum import StrEnum
+    from strenum import StrEnum  # noqa
 from enum import auto
 from typing import NamedTuple, Any, Type
 
@@ -119,7 +119,7 @@ class MigrationCommand(NamedTuple):
             if arg[0] == 'DBTable':
                 args.append(tables[arg[1]])
             elif arg[0] == 'DBField':
-                args.append(args[0]._fields_[arg[0]])
+                args.append(args[0].DB.fields[arg[0]])
             elif arg[0] == 'str':
                 args.append(arg)
             elif arg[0] == 'bool':
@@ -162,18 +162,18 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
 
     # extend by related types from other schemas
     for t in all_tables.copy():
-        for f in t._fields_.values():
-            if f.ref and f.type._schema_ != schema:
-                fields = {fname: field for fname, field in f.type._fields_.items() if field.pk or field.cid}
+        for f in t.DB.fields.values():
+            if f.ref and f.type.DB.schema != schema:
+                fields = {fname: field for fname, field in f.type.DB.fields.items() if field.pk or field.cid}
                 annotations = {fname: annot for fname, annot in f.type.__annotations__.items() if fname in fields}
                 ShortClass = typing.cast(typing.Type[DBTable], type(f.type.__qualname__, (DBTable, ), {
                     '__qualname__': f.type.__qualname__,
                     '__module__': f.type.__module__,
                     '__annotations__': annotations,
-                    '_table_': f.type._table_,
-                    '_schema_': f.type._schema_,
-                    '_extendable_': f.type._extendable_,
-                    '_discriminator_': f.type._discriminator_,
+                    '_table_': f.type.DB.table,
+                    '_schema_': f.type.DB.schema,
+                    '_extendable_': f.type.DB.extendable,
+                    '_discriminator_': f.type.DB.discriminator,
                     '_just_for_typing_': True,
                     **fields
                 }))
@@ -183,16 +183,16 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
 
     # compare two schemes and generate list of changes
     # 1. Check for new tables
-    tables_to_add = {name_new: t_new for name_new, t_new in tables_new.items() if name_new not in tables_old and not t_new._just_for_typing_}
+    tables_to_add = {name_new: t_new for name_new, t_new in tables_new.items() if name_new not in tables_old and not t_new.DB.just_for_typing}
 
     # 2. Check for deleted tables
-    tables_to_delete = {name_old: t_old for name_old, t_old in tables_old.items() if name_old not in tables_new and not t_old._just_for_typing_}
+    tables_to_delete = {name_old: t_old for name_old, t_old in tables_old.items() if name_old not in tables_new and not t_old.DB.just_for_typing}
 
     # 3. Check to rename
     tables_to_rename = []
     for pair in rename_list:
         if pair[0] in tables_to_delete and pair[1] in tables_to_add:
-            tables_to_rename.append((tables_old._schema_, pair[0], pair[1]))
+            tables_to_rename.append((tables_to_delete[pair[0]].DB.schema, pair[0], pair[1]))
             del tables_to_delete[pair[0]]
             del tables_to_add[pair[1]]
 
@@ -211,8 +211,8 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
     for t_name, table_old in tables_old.items():
         table_new = tables_new[t_name]
 
-        fields_old = {f.column: f for f in table_old._fields_.values() if not f.prop}
-        fields_new = {f.column: f for f in table_new._fields_.values() if not f.prop}
+        fields_old = {f.column: f for f in table_old.DB.fields.values() if not f.prop}
+        fields_new = {f.column: f for f in table_new.DB.fields.values() if not f.prop}
         
         # 4.1. Check new fields
         fields_to_add = {f_name: f for f_name, f in fields_new.items() if f_name not in fields_old}
@@ -286,12 +286,12 @@ def apply_changes(db: DBFactory, schema: str, commands: list[MigrationCommand], 
                 match command.command:
                     case MigrationType.ADD_TABLE:
                         conn.execute(trans.create_table(command.subject[0]))
-                        for field in command.subject[0]._fields_.values():
+                        for field in command.subject[0].DB.fields.values():
                             if field.ref:
                                 conn.execute(trans.add_reference(command.subject[0], field))
 
                     case MigrationType.DELETE_TABLE:
-                        for field in command.subject[0]._fields_.values():
+                        for field in command.subject[0].DB.fields.values():
                             if field.ref:
                                 conn.execute(trans.drop_reference(command.subject[0], field))
                         conn.execute(trans.drop_table(command.subject[0]))

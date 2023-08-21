@@ -21,6 +21,7 @@ if typing.TYPE_CHECKING:
 
 class NamedTable(DBTable):
     _meta_ = True
+
     name: str
 
     def __str__(self):
@@ -28,6 +29,7 @@ class NamedTable(DBTable):
 
 
 class Client(NamedTable):
+    id: int = DBField(pk=True)
     city: 'City' = DBField(reverse_name='clients')
     fact_city: 'City' = DBField(reverse_name='fact_clients')
 
@@ -82,18 +84,19 @@ class App(NamedTable):
     users: ManyToMany[User]
 
 
-import logging
+def configure_logging():
+    import logging
 
-logger = logging.getLogger('psycopg')
-logger.setLevel(logging.DEBUG)
+    logger = logging.getLogger('psycopg')
+    logger.setLevel(logging.DEBUG)
 
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.DEBUG)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
 
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(formatter)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(formatter)
 
-logger.addHandler(console_handler)
+    logger.addHandler(console_handler)
 
 
 if __name__ == '__main__':
