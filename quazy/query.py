@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import asyncio
-from contextlib import contextmanager, asynccontextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass, field as data_field
 import typing
 from inspect import currentframe
@@ -15,64 +14,72 @@ from quazy.exceptions import *
 
 if typing.TYPE_CHECKING:
     from typing import *
-    from asyncpg.prepared_stmt import PreparedStatement
+
 
 __all__ = ['DBQuery', 'DBScheme']
 
 
 class DBQueryField:
-    def __init__(self, query: DBQuery, table: Type[DBTable], path: str = None):
+    def __init__(self, query: DBQuery, table: Type[DBTable], path: str = None, field: DBField = None):
         self._query: DBQuery = query
         self._table: Type[DBTable] = table
         self._path: str = path or table.DB.snake_name
+        self._field: DBField = field
 
     def __getattr__(self, item):
         if item.startswith('_'):
             return super().__getattribute__(item)
 
-        if self._path not in self._query.joins:
-            self._query.joins[self._path] = DBJoin(self._table, DBJoinKind.SOURCE)
+        if not self._field:
+            if self._path not in self._query.joins:
+                self._query.joins[self._path] = DBJoin(self._table, DBJoinKind.SOURCE)
+        else:
+            join_path = f'{self._table.DB.snake_name}__{self._field.name}'
+            if join_path not in self._query.joins:
+                self._query.joins[join_path] = DBJoin(self._field.type, DBJoinKind.LEFT,
+                                                      f'{self._path} = {join_path}.{self._field.type.DB.pk.name}')
+            return getattr(DBQueryField(self._query, self._field.type, join_path), item)
 
-        if item in self._table.DB.fields:
-            field: DBField = self._table.DB.fields[item]
-            if isinstance(field.type, dict):
-                field_path = f"{self._path}->'{item}'"
+        DB = self._table.DB
+        if item in DB.fields:
+            field: DBField = DB.fields[item]
+            if not field.prop:
+                field_path = f'{self._path}.{item}'
             else:
-                if not field.prop:
-                    field_path = f'{self._path}.{item}'
-                else:
-                    field_path = self._query.db._trans.deserialize(field, f"{self._path}->>'{item}'")
+                field_path = f'{self._path}.{DB.body.name}'
+                field_path = self._query.db._trans.deserialize(field, f"{field_path}->>'{item}'")
 
-                if field.ref:
-                    join_path = f'{self._path}__{field.type.DB.snake_name}'
-                    if join_path not in self._query.joins:
-                        self._query.joins[join_path] = DBJoin(field.type, DBJoinKind.LEFT, f'{field_path} = {join_path}.{field.type.DB.pk.name}')
-                    return DBQueryField(self._query, field.type, join_path)
+            if field.ref:
+                return DBQueryField(self._query, self._table, field_path, field)
             return DBSQL(self._query, f'{field_path}')
 
-        elif table := self._table.DB.subtables.get(item) or self._table.DB.many_fields.get(item):
-            join_path = f'{self._path}__{table.DB.snake_name}'
+        elif table := DB.subtables.get(item) or DB.many_fields.get(item):
+            join_path = f'{self._path}__{item}'
             if join_path not in self._query.joins:
                 self._query.joins[join_path] = DBJoin(table, DBJoinKind.LEFT,
-                                                  f'{self._path}.{self._table.DB.pk.name} = {join_path}.{self._table.DB.table}')
+                                                  f'{self._path}.{DB.pk.name} = {join_path}.{DB.table}')
             return DBQueryField(self._query, table, join_path)
 
-        raise QuazyFieldNameError(f'field {item} not found in {self._table.__name__}')
+        raise QuazyFieldNameError(f'field `{item}` is not found in `{DB.table}`')
 
     def __str__(self):
         return self._path
 
     def __eq__(self, other) -> DBSQL:
-        return typing.cast(DBSQL, getattr(self, self._table.DB.pk.name)) == other
+        return DBSQL(self._query, self._path) == other
 
     def __ne__(self, other) -> DBSQL:
-        return typing.cast(DBSQL, getattr(self, self._table.DB.pk.name)) != other
+        return DBSQL(self._query, self._path) != other
 
     def __contains__(self, item) -> DBSQL:
-        return typing.cast(DBSQL, getattr(self, self._table.DB.pk.name) in item)
+        return typing.cast(DBSQL, DBSQL(self._query, self._path) in item)
+
+    @property
+    def pk(self):
+        return getattr(self, self._table.DB.pk.name)
 
 
-class QQueryField:
+class DBSubqueryField:
     def __init__(self, query: DBQuery, subquery: DBQuery, path: str = None):
         self._query: DBQuery = query
         self._subquery: DBQuery = subquery
@@ -140,6 +147,12 @@ class DBSQL:
     
     def postfix(self, sql_text: str) -> DBSQL:
         return self.sql(f'{self.sql_text} {sql_text}')
+
+    def __getitem__(self, item):
+        if item is int:
+            return self.sql(f'{self.sql_text}[{item}]')
+        else:
+            return self.sql(f"{self.sql_text}->'{item}'")
 
     def __add__(self, other) -> DBSQL:
         return self.op('+', other)
@@ -234,8 +247,11 @@ class DBSQL:
     def __le__(self, other) -> DBSQL:
         return self.op('<=', other)
 
-    def __str__(self) -> DBSQL:
+    def as_string(self) -> DBSQL:
         return self.cast('text')
+
+    def __str__(self):
+        return self.sql_text
 
     def __int__(self) -> DBSQL:
         return self.cast('int')
@@ -310,7 +326,6 @@ class DBQuery:
         self.with_queries: List[DBWithClause] = []
         self.args: OrderedDict[str, Any] = OrderedDict()
         self._arg_counter = 0
-        self.prepared_statement: Optional[PreparedStatement] = None
         self._hash: Optional[Hashable] = None
 
         self.scheme: Union[SimpleNamespace, DBQueryField] = DBScheme()
@@ -322,6 +337,9 @@ class DBQuery:
             table_space = DBQueryField(self, table_class)
             setattr(table_space, '_db', self.scheme)
             self.scheme = table_space
+
+            if table_class.DB.extendable:
+                self.filters.append(getattr(table_space, table_class.DB.cid.name) == self.arg(table_class.DB.discriminator))
 
     def __copy__(self):
         obj = object.__new__(DBQuery)
@@ -363,29 +381,6 @@ class DBQuery:
     def get_scheme(self) -> SimpleNamespace:
         yield self.scheme
 
-    @asynccontextmanager
-    async def prepare_async(self):
-        async with self.db.get_connection() as conn:
-            sql = self.db._trans.select(self)
-            self.prepared_statement = await conn.prepare(sql)
-            yield
-            self.prepared_statement = None
-
-    @contextmanager
-    def prepare(self):
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-        conn = loop.run_until_complete(self.db.get_connection())
-        try:
-            sql = self.db._trans.select(self)
-            self.prepared_statement = loop.run_until_complete(conn.prepare_async(sql))
-            yield
-        finally:
-            self.prepared_statement = None
-            loop.run_until_complete(self.db.release_connection(conn))
-
     def arg(self, value: Any, aggregated: bool = False) -> DBSQL:
         if isinstance(value, DBSQL):
             return value
@@ -424,17 +419,22 @@ class DBQuery:
             return DBSQL(self, expr)
         raise QuazyFieldTypeError('Expression type not supported')
 
-    def with_query(self, subquery: DBQuery, not_materialized: bool = False) -> QQueryField:
+    def with_query(self, subquery: DBQuery, not_materialized: bool = False) -> DBSubqueryField:
         self.with_queries.append(DBWithClause(subquery, not_materialized))
         for k, v in subquery.args.items():
             if k.startswith('_arg_'):
                 self.args[f'_{subquery.name}{k}'] = v
             else:
                 self.args[k] = v
-        return QQueryField(self, subquery)
+        return DBSubqueryField(self, subquery)
 
     def select(self, *field_names: str, **fields: FDBSQL) -> DBQuery:
-        self.fetch_objects = False
+        if self.fetch_objects:
+            if 'pk' not in field_names:
+                self.fetch_objects = False
+            else:
+                self.fields[self.table_class.DB.pk.name] = self.scheme.pk
+                field_names = set(field_names) - {'pk'}
         for field_name in field_names:
             self.fields[field_name] = getattr(self.scheme, field_name)
         for field_name, field_value in fields.items():
@@ -516,8 +516,9 @@ class DBQuery:
             if not self.fetch_objects:
                 raise QuazyError('No fields selected')
             else:
-                for field_name in self.table_class.DB.fields.keys():
-                    self.fields[field_name] = getattr(self.scheme, field_name)
+                for field_name, field in self.table_class.DB.fields.items():
+                    if not field.body:
+                        self.fields[field_name] = getattr(self.scheme, field_name)
 
     @contextmanager
     def execute(self, as_dict: bool = False):
@@ -534,6 +535,13 @@ class DBQuery:
         with self.execute(as_dict) as curr:
             return curr.fetchone()
 
+    def get(self, pk_id: Any) -> DBTable | None:
+        if not self.fetch_objects:
+            raise QuazyWrongOperation("`get` possible for objects query")
+        self.filters.clear()
+        self.filters.append(self.scheme.pk == pk_id)  # type: ignore
+        return self.fetchone()
+
     def fetchall(self, as_dict: bool = False) -> Any:
         with self.execute(as_dict) as curr:
             return curr.fetchall()
@@ -541,6 +549,10 @@ class DBQuery:
     def fetchvalue(self) -> Any:
         with self.execute() as curr:
             return curr.fetchone()[0]
+
+    def fetchlist(self) -> list[Any]:
+        with self.execute() as curr:
+            return [row[0] for row in curr.fetchall()]
 
     def exists(self) -> bool:
         return self.fetchone() is not None

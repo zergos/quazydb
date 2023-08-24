@@ -14,6 +14,10 @@ class QuazyFieldNameError(QuazyError):
     pass
 
 
+class QuazyMissedField(QuazyError):
+    pass
+
+
 class QuazyTranslatorException(QuazyError):
     pass
 

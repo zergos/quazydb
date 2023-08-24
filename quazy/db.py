@@ -6,13 +6,13 @@ import inspect
 from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass, field as data_field
+from enum import IntEnum
 
 import psycopg
 import psycopg_pool
 from psycopg.rows import namedtuple_row, class_row, dict_row
 
 from .exceptions import *
-
 from .db_types import *
 from .translator import Translator
 
@@ -23,7 +23,7 @@ if typing.TYPE_CHECKING:
     from typing import *
     from types import SimpleNamespace
     import asyncpg
-    from .query import DBQuery
+    from .query import DBQuery, DBQueryField
 
 __all__ = ['DBFactory', 'DBField', 'DBTable', 'UX', 'Many']
 
@@ -212,14 +212,25 @@ class DBFactory:
 
                 for table in all_tables:
                     for field in table.DB.fields.values():
-                        if field.ref: # and not field.many_field:
+                        if field.ref and not field.prop:
                             conn.execute(self._trans.add_reference(table, field))
 
-    def insert(self, item: DBTable):
+    def insert(self, item: DBTable) -> DBTable:
         item._before_insert(self)
         fields: List[Tuple[DBField, Any]] = []
         for name, field in item.DB.fields.items():
-            fields.append((field, getattr(item, name, DefaultValue)))
+            if field.cid:
+                fields.append((field, item.DB.discriminator))
+            elif field.body:
+                continue
+            elif field.required and not field.pk and not field.default and not field.default_sql:
+                value = getattr(item, name, None)
+                if value is None:
+                    raise QuazyMissedField(f"Field `{name}` value is missed for `{item.__class__.__name__}`")
+                fields.append((field, value))
+            else:
+                fields.append((field, getattr(item, name, DefaultValue)))
+
         with self._connection_pool.connection() as conn:  # type: psycopg.Connection
 
             sql, values = self._trans.insert(item.__class__, fields)
@@ -265,8 +276,9 @@ class DBFactory:
                         conn.execute(new_indices_sql, {"value": item.pk, "index": index})
 
         item._after_insert(self)
+        return item
 
-    def update(self, item: DBTable):
+    def update(self, item: DBTable) -> DBTable:
         item._before_update(self)
         fields: List[Tuple[DBField, Any]] = []
         for name in item._modified_fields_:
@@ -274,6 +286,8 @@ class DBFactory:
             fields.append((field, getattr(item, name, DefaultValue)))
         with self._connection_pool.connection() as conn:
             sql, values = self._trans.update(item.__class__, fields)
+            if not values:
+                return item
             values['v1'] = getattr(item, item.DB.pk.name)
             conn.execute(sql, values)
 
@@ -283,6 +297,7 @@ class DBFactory:
                 for row in getattr(item, table.DB.snake_name):
                     self.insert(row)
         item._after_update(self)
+        return  item
 
     @contextmanager
     def select(self, query: Union[DBQuery, str], as_dict: bool = False):
@@ -292,18 +307,18 @@ class DBFactory:
                 sql = self._trans.select(query)
                 if self._debug_mode: print(sql)
                 if as_dict:
-                    row_maker = dict_row
+                    row_factory = dict_row
                 elif query.fetch_objects:
-                    row_maker = class_row(query.table_class)
+                    row_factory = class_row(lambda **kwargs: query.table_class(_db_=self, **kwargs))
                 else:
-                    row_maker = namedtuple_row
-                with conn.cursor(binary=True, row_factory=row_maker) as curr:
+                    row_factory = namedtuple_row
+                with conn.cursor(binary=True, row_factory=row_factory) as curr:
                     yield curr.execute(sql, query.args)
             else:
                 with conn.cursor(binary=True, row_factory=dict_row if as_dict else namedtuple_row) as curr:
                     yield curr.execute(query)
 
-    def save(self, item: DBTable, lookup_field: str | None = None):
+    def save(self, item: DBTable, lookup_field: str | None = None) -> DBTable:
         pk_name = item.__class__.DB.pk.name
         if lookup_field:
             row = self.query(item.__class__)\
@@ -321,6 +336,7 @@ class DBFactory:
                 self.update(item)
             else:
                 self.insert(item)
+        return item
 
     def table_exists(self, table: DBTable) -> bool:
         with self.select(self._trans.is_table_exists(table)) as res:
@@ -483,6 +499,7 @@ class MetaTable(type):
                     if DB.body:
                         raise QuazyFieldTypeError(f'Table `{attrs["__qualname__"]}` has body field already')
 
+                    field.body = True
                     DB.body = field
             else:
                 field = DBField(default=field)
@@ -535,6 +552,7 @@ class DBTable(metaclass=MetaTable):
     _meta_: ClassVar[bool]
 
     # state attributes
+    _db_: DBFactory | None
     _modified_fields_: set[str]
 
     class DB:
@@ -555,6 +573,23 @@ class DBTable(metaclass=MetaTable):
         many_to_many_fields: ClassVar[typing.Dict[str, DBManyToManyField]] = None
         fields: ClassVar[typing.Dict[str, DBField]] = None  # list of all fields
         # * marked attributes are able to modify by descendants
+
+    class Getter:
+        def __init__(self, db: DBFactory, table: Type[DBTable], pk_id: Any, view: str = None):
+            self._db = db
+            self._table = table
+            self._pk_id = pk_id
+            self._view = view
+
+        def __str__(self):
+            return self._view or self._pk_id
+
+        def __getattr__(self, item):
+            if item.startswith('_'):
+                return super().__getattribute__(self, item)
+
+            related = self._db.query(self._table).select('pk', item).get(self._pk_id)
+            return getattr(related, item)
 
     @classmethod
     def resolve_types(cls, globalns):
@@ -589,7 +624,7 @@ class DBTable(metaclass=MetaTable):
 
     @classmethod
     def resolve_type(cls, t: Union[Type, typing._GenericAlias], field: DBField, globalns) -> bool | None:
-        if t in KNOWN_TYPES:
+        if t in KNOWN_TYPES or inspect.isclass(t) and issubclass(t, IntEnum):
             # Base type
             field.type = t
             return
@@ -617,9 +652,16 @@ class DBTable(metaclass=MetaTable):
                 # Field CID declaration
                 field.type = t.__args__[0] if t.__args__ else str
                 return
-            elif t.__origin__ is FieldBody:
-                field.type = dict
+            elif t.__origin__ is Property:
+                field.prop = True
+                cls.resolve_type(t.__args__[0], field, globalns)
                 return
+        elif t is FieldCID:
+            field.type = str
+            return
+        elif t is FieldBody:
+            field.type = dict
+            return
         elif isinstance(t, typing.ForwardRef):
             field.ref = True
             field.type = t._evaluate(globalns, {})
@@ -690,7 +732,8 @@ class DBTable(metaclass=MetaTable):
 
 
     def __init__(self, **initial):
-        self._modified_fields_: Set[str] = set()
+        self._modified_fields_: set[str] | None = None
+        self._db_ = initial.pop('_db_', None)
         #self.id: Union[None, int, UUID] = None
         #for field_name, field in self.fields.items():
         #    if field.many_field:
@@ -698,18 +741,31 @@ class DBTable(metaclass=MetaTable):
         for field_name, field in self.DB.many_fields.items():
             setattr(self, field_name, set())
         for k, v in initial.items():
+            if k.endswith("__view"):
+                continue
             if k not in self.DB.fields and k not in self.DB.many_fields and k not in self.DB.many_to_many_fields:
                 raise QuazyFieldNameError(f'Wrong field name `{k}` in new instance of `{self.__class__.__name__}`')
             # TODO: validate types
+            if self._db_:
+                if field := self.DB.fields.get(k):
+                    if issubclass(field.type, IntEnum):
+                        setattr(self, k, field.type(v))
+                        continue
+                    elif field.ref:
+                        view = initial.get(f'{k}__view', None)
+                        setattr(self, k, DBTable.Getter(self._db_, field.type, v, view))
+                        continue
             setattr(self, k, v)
         if self.DB.pk.name not in initial:
             self.pk = None
         for field_name in self.DB.subtables:
             setattr(self, field_name, list())
+        self._modified_fields_ = set()
 
     def __setattr__(self, key, value):
         if key in self.DB.fields:
-            self._modified_fields_.add(key)
+            if self._modified_fields_ is not None:
+                self._modified_fields_.add(key)
         return super().__setattr__(key, value)
 
     @classmethod
@@ -755,6 +811,17 @@ class DBTable(metaclass=MetaTable):
     @pk.setter
     def pk(self, value):
         setattr(self, self.DB.pk.name, value)
+
+    def __repr__(self):
+        res = []
+        for k, v in vars(self).items():
+            if not k.startswith('_'):
+                res.append(f'{k}: {v}')
+        return '\n'.join(res)
+
+    @classmethod
+    def _view(cls, query: DBQueryField):
+        return None
 
     def _before_update(self, db: DBFactory):
         pass

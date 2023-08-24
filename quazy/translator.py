@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import inspect
+from enum import IntEnum
+
 from .db_types import *
 from .exceptions import *
 
@@ -9,7 +11,7 @@ import typing
 if typing.TYPE_CHECKING:
     from typing import *
     from .db import DBTable, DBField
-    from .query import DBQuery, DBSQL, DBJoinKind, DBWithClause
+    from .query import DBQuery, DBSQL, DBJoinKind, DBWithClause, DBQueryField
 
 
 class Translator:
@@ -25,6 +27,7 @@ class Translator:
         bool: 'boolean',
         dict: 'jsonb',
         UUID: 'uuid',
+        IntEnum: 'int',
     }
 
     @classmethod
@@ -33,18 +36,27 @@ class Translator:
             return cls.pk_type_name(field.type)
         if field.type in cls.TYPES_MAP:
             return cls.TYPES_MAP[field.type]
+        if inspect.isclass(field.type) and issubclass(field.type, IntEnum):
+            return cls.TYPES_MAP[IntEnum]
         # TODO: Decimal
-        # TODO: enum
         # TODO: array
         if field.ref:
             return cls.type_name(field.type.DB.pk, False)
         raise QuazyTranslatorException(f'Unsupported DB column type {field.name} ({field.type})')
 
     @classmethod
+    def type_cast(cls, field: DBField) -> str:
+        if field.type in cls.TYPES_MAP:
+            return cls.TYPES_MAP[field.type]
+        if field.ref:
+            return cls.type_cast(field.type.DB.pk)
+        raise QuazyTranslatorException(f'Unsupported DB column type {field.name} ({field.type})')
+
+    @classmethod
     def serialize(cls, field: DBField, value: str) -> str:
-        if field.type is str:
-            return value
-        if field.type in (int, float, bool, bytes, UUID):
+        #if field.type is str:
+        #    return value
+        if field.type in (str, int, float, bool, bytes, UUID):
             return f'{value}::text'
         if field.ref:
             return cls.serialize(field.type.DB.pk, value)
@@ -59,15 +71,15 @@ class Translator:
         if field.type is str:
             return field_path
         if field.type in (int, float, bool, bytes, UUID):
-            return f'CAST({field_path} as {cls.type_name(field)})'
+            return f'CAST({field_path} as {cls.type_cast(field)})'
         if field.ref:
             return cls.deserialize(field.type.DB.pk, field_path)
         if field.type is datetime:
-            return f'to_timestamp({field_path})'
+            return f'to_timestamp(({field_path})::integer)'
         if field.type is date:
             return f'date(to_timestamp({field_path}))'
         if field.type is time:
-            return f'to_timestamp({field_path})::time'
+            return f'to_timestamp(({field_path})::integer)::time'
         if field.type is timedelta:
             return f"({field_path} || ' seconds')::interval"
         raise QuazyFieldTypeError(f'Type `{field.type.__name__}` is not supported for serialization')
@@ -81,11 +93,11 @@ class Translator:
         raise QuazyTranslatorException(f'Unsupported DB column serial type {ctype}')
 
     @classmethod
-    def column_options(cls, field: DBField) -> str:
+    def column_options(cls, field: DBField, table: Type[DBTable]) -> str:
         res: List[str] = []
         if field.unique:
             res.append('UNIQUE')
-        if field.required:
+        if field.required and not table.DB.extendable:
             res.append('NOT NULL')
         if field.default_sql:
             res.append(f'DEFAULT {field.default_sql!r}')
@@ -131,7 +143,7 @@ class Translator:
     @classmethod
     def create_table(cls, table: Type[DBTable]) -> str:
         cols = ', '.join(
-            f'"{field.column}" {cls.type_name(field)} {cls.column_options(field)}'
+            f'"{field.column}" {cls.type_name(field)} {cls.column_options(field, table)}'
             for field in table.DB.fields.values()
             #if not field.many_field and not field.prop
             if not field.prop
@@ -204,6 +216,8 @@ class Translator:
             return json.dumps(value)
         if field.ref:
             return getattr(value, field.type.DB.pk.name)
+        if issubclass(field.type, IntEnum):
+            return value.value
         return value
 
     @classmethod
@@ -258,7 +272,7 @@ class Translator:
         if table.DB.body:
             if columns:
                 columns += ','
-            columns += table.DB.body.column
+            columns += f'"{table.DB.body.column}"'
             if body_values:
                 body_value = ', '.join(f"'{name}',{value}" for name, value in body_values.items())
                 body_value = f'json_build_object({body_value})'
@@ -310,11 +324,13 @@ class Translator:
         return res, values
 
     @classmethod
-    def sql_value(cls, value: Union[DBSQL, str]):
-        from .query import DBSQL
+    def sql_value(cls, value: Union[DBSQL, DBQueryField, str]) -> str:
+        from .query import DBSQL, DBQueryField
         if isinstance(value, DBSQL):
             return repr(value)
-        return value.replace("'", "''")
+        elif isinstance(value, DBQueryField):
+            return str(value)
+        return value #.replace("'", "''")
 
     @classmethod
     def with_select(cls, with_queries: List[DBWithClause]):
@@ -330,7 +346,7 @@ class Translator:
 
     @classmethod
     def select(cls, query: DBQuery):
-        from .query import DBJoinKind
+        from .query import DBJoinKind, DBQueryField
         from .db import DBTable
 
         sql = ''
@@ -341,6 +357,10 @@ class Translator:
         fields = []
         for field, value in query.fields.items():
             fields.append(f'{cls.sql_value(value)} AS "{field}"') if field != '*' else fields.append(cls.sql_value(value))
+            if isinstance(value, DBQueryField):
+                view = value._field.type._view(value)
+                if view is not None:
+                    fields.append(f'{view} AS "{field}__view"')
         joins = []
         for join_name, join in query.joins.items():
             if join.kind == DBJoinKind.SOURCE:

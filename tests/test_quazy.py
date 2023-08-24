@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import random
 import sys
 import typing
 from decimal import Decimal
+from enum import IntEnum
 from random import randint
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from types import SimpleNamespace
 
 sys.path.append(r'D:\projects\bol\quazydb')
@@ -29,7 +32,6 @@ class NamedTable(DBTable):
 
 
 class Client(NamedTable):
-    id: int = DBField(pk=True)
     city: 'City' = DBField(reverse_name='clients')
     fact_city: 'City' = DBField(reverse_name='fact_clients')
 
@@ -71,9 +73,17 @@ class Catalog(DBTable):
     cid: FieldCID[str]
     name: str
 
+    @classmethod
+    def _view(cls, query: DBQueryField):
+        return query.name
+
 
 class ItemCatalog(Catalog):
     unit: Unit
+
+
+class GroupCatalog(Catalog):
+    random_id: int = DBField(default=lambda : random.randint(1000, 2000))
 
 
 class User(NamedTable):
@@ -82,6 +92,20 @@ class User(NamedTable):
 
 class App(NamedTable):
     users: ManyToMany[User]
+
+
+class Journal(NamedTable):
+    class ContentClass(IntEnum):
+        MEDIUM = 1
+        BLOG = 2
+        HIGHLIGHTS = 3
+
+    body: FieldBody
+    title: Property[str]
+    price: Property[float]
+    group: Property[GroupCatalog]
+    pub_date: Property[datetime]
+    cc: Journal.ContentClass
 
 
 def configure_logging():
@@ -101,6 +125,7 @@ def configure_logging():
 
 if __name__ == '__main__':
     db = DBFactory.postgres(conninfo="postgresql://quazy:quazy@localhost/quazy")
+    db._debug_mode = True
     db.use_module()
 
     #import jsonpickle
@@ -171,5 +196,20 @@ if __name__ == '__main__':
 
     user = User(name="zergos", apps=list(App(name=f'app{i+1}') for i in range(10)))
     db.insert(user)
+
+    for i in range(10):
+        db.insert(ItemCatalog(name=f'Item{i+1}', unit=qty))
+    for i in range(10):
+        db.insert(GroupCatalog(name=f'Group{i+1}'))
+
+    print(db.query(GroupCatalog).select('name').fetchlist())
+
+    g = db.insert(GroupCatalog(name="Life"))
+    j = db.insert(Journal(name="Racoon", title="Racoons life ep. 1", price=1.99, group=g, pub_date=datetime.utcnow(), cc=Journal.ContentClass.HIGHLIGHTS))
+
+    j_out = db.query(Journal).fetchone()
+    print(repr(j_out))
+
+    print(j_out.group.random_id)
 
     print('Done')
