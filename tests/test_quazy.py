@@ -118,6 +118,8 @@ def configure_logging():
 
 
 if __name__ == '__main__':
+    #configure_logging()
+
     db = DBFactory.postgres(conninfo="postgresql://quazy:quazy@localhost/quazy")
     db._debug_mode = True
     db.use_module()

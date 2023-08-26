@@ -94,7 +94,7 @@ class Translator:
 
     @classmethod
     def column_options(cls, field: DBField, table: Type[DBTable]) -> str:
-        res: List[str] = []
+        res: list[str] = []
         if field.unique:
             res.append('UNIQUE')
         if field.required and not table.DB.extendable:
@@ -221,10 +221,10 @@ class Translator:
         return value
 
     @classmethod
-    def insert(cls, table: Type[DBTable], fields: List[Tuple[DBField, Any]]) -> Tuple[str, Dict[str, any]]:
-        sql_values: List[str] = []
-        values: Dict[str, Any] = {}
-        body_values: Dict[str, Any] = {}
+    def insert(cls, table: Type[DBTable], fields: list[tuple[DBField, Any]]) -> tuple[str, dict[str, any]]:
+        sql_values: list[str] = []
+        values: dict[str, Any] = {}
+        body_values: dict[str, Any] = {}
         idx = 1
         for field, value in fields:
             if not field.prop:  # attr
@@ -294,9 +294,9 @@ class Translator:
         return f'DELETE FROM {cls.table_name(table)} WHERE "{column}" = %s'
 
     @classmethod
-    def update(cls, table: Type[DBTable], fields: List[Tuple[DBField, Any]]) -> Tuple[str, Dict[str, any]]:
-        sql_values: List[str] = []
-        values: Dict[str, Any] = {}
+    def update(cls, table: Type[DBTable], fields: list[tuple[DBField, Any]]) -> tuple[str, dict[str, any]]:
+        sql_values: list[str] = []
+        values: dict[str, Any] = {}
         idx = 2
         #filtered = [f for f in fields if not f[0].many_field and not f[0].pk]
         filtered = [f for f in fields if not f[0].pk]
@@ -305,8 +305,8 @@ class Translator:
             values[f'v{idx}'] = cls.get_value(field, value)
             idx += 1
 
-        sets: List[str] = []
-        props: List[str] = []
+        sets: list[str] = []
+        props: list[str] = []
         for field, sql_value in zip(filtered, sql_values):
             if not field[0].prop:
                 sets.append(f'"{field[0].column}" = {sql_value}')
@@ -333,7 +333,7 @@ class Translator:
         return value #.replace("'", "''")
 
     @classmethod
-    def with_select(cls, with_queries: List[DBWithClause]):
+    def with_select(cls, with_queries: list[DBWithClause]):
         sql = "WITH\n"
         with_blocks = []
         for sub in with_queries:

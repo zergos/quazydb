@@ -126,7 +126,7 @@ class DBFactory:
         for table in self._tables:
             all_tables.extend(table.DB.subtables.values())
 
-        ext: Dict[str, List[Type[DBTable]]] = defaultdict(list)
+        ext: dict[str, list[Type[DBTable]]] = defaultdict(list)
         for t in all_tables.copy():
             if t.DB.extendable:
                 ext[t.DB.table].append(t)
@@ -217,7 +217,7 @@ class DBFactory:
 
     def insert(self, item: DBTable) -> DBTable:
         item._before_insert(self)
-        fields: List[Tuple[DBField, Any]] = []
+        fields: list[tuple[DBField, Any]] = []
         for name, field in item.DB.fields.items():
             if field.cid:
                 fields.append((field, item.DB.discriminator))
@@ -280,7 +280,7 @@ class DBFactory:
 
     def update(self, item: DBTable) -> DBTable:
         item._before_update(self)
-        fields: List[Tuple[DBField, Any]] = []
+        fields: list[tuple[DBField, Any]] = []
         for name in item._modified_fields_:
             field = item.DB.fields[name]
             fields.append((field, getattr(item, name, DefaultValue)))
@@ -371,7 +371,7 @@ class DBField:
         elif not self.ux.title:
             self.ux.title = self.name
 
-    def _dump_schema(self) -> Dict[str, Any]:
+    def _dump_schema(self) -> dict[str, Any]:
         res = {
             'name': self.name,
             'column': self.column,
@@ -386,7 +386,7 @@ class DBField:
         return res
 
     @classmethod
-    def _load_schema(cls, state: Dict[str, Any]) -> DBField:
+    def _load_schema(cls, state: dict[str, Any]) -> DBField:
         name = state.pop('name')
         f_type = state.pop('type')
         ref = state.pop('ref')
@@ -423,7 +423,7 @@ class DBManyToManyField(DBManyField):
 class MetaTable(type):
     db_base_class: type
 
-    def __new__(cls, clsname: str, bases: Tuple[Type[DBTable], ...], attrs: dict[str, Any]):
+    def __new__(cls, clsname: str, bases: tuple[Type[DBTable], ...], attrs: dict[str, Any]):
         if clsname == 'DBTable':
             cls.db_base_class = attrs['DB']
             return super().__new__(cls, clsname, bases, attrs)
@@ -467,7 +467,7 @@ class MetaTable(type):
         return super().__new__(cls, clsname, bases, attrs)
 
     @staticmethod
-    def collect_fields(bases: Tuple[Type[DBTable], ...], DB: Type[DBTable.DB], attrs: dict[str, Any]):
+    def collect_fields(bases: tuple[Type[DBTable], ...], DB: Type[DBTable.DB], attrs: dict[str, Any]):
 
         if DB.extendable:
             DB.is_root = True
@@ -522,8 +522,8 @@ class MetaTable(type):
         DB.fields = fields
 
     @staticmethod
-    def collect_bases_fields(bases: Tuple[Type, ...], DB: Type[DBTable.DB]) -> Dict[str, DBField]:
-        fields: Dict[str, DBField] = dict()
+    def collect_bases_fields(bases: tuple[Type, ...], DB: Type[DBTable.DB]) -> dict[str, DBField]:
+        fields: dict[str, DBField] = dict()
         for base in bases:
             if base is DBTable:
                 break
@@ -565,16 +565,16 @@ class DBTable(metaclass=MetaTable):
         is_root: ClassVar[bool] = False        # is root of extendable tree
         discriminator: ClassVar[typing.Any]    # inherited table inner code
         owner: ClassVar[typing.Union[str, typing.Type[DBTable]]] = None # table owner of sub table
-        subtables: ClassVar[typing.Dict[str, typing.Type[DBTable]]] = None   # sub tables list
+        subtables: ClassVar[dict[str, typing.Type[DBTable]]] = None   # sub tables list
         meta: ClassVar[bool] = False           # mark table as meta table (abstract) *
         pk: ClassVar[DBField] = None           # reference to primary field
         body: ClassVar[DBField] = None         # reference to body field of None
-        many_fields: ClassVar[typing.Dict[str, DBManyField]] = None
-        many_to_many_fields: ClassVar[typing.Dict[str, DBManyToManyField]] = None
-        fields: ClassVar[typing.Dict[str, DBField]] = None  # list of all fields
+        many_fields: ClassVar[dict[str, DBManyField]] = None
+        many_to_many_fields: ClassVar[dict[str, DBManyToManyField]] = None
+        fields: ClassVar[dict[str, DBField]] = None  # list of all fields
         # * marked attributes are able to modify by descendants
 
-    class Getter:
+    class ItemGetter:
         def __init__(self, db: DBFactory, table: Type[DBTable], pk_id: Any, view: str = None):
             self._db = db
             self._table = table
@@ -753,7 +753,7 @@ class DBTable(metaclass=MetaTable):
                         continue
                     elif field.ref:
                         view = initial.get(f'{k}__view', None)
-                        setattr(self, k, DBTable.Getter(self._db_, field.type, v, view))
+                        setattr(self, k, DBTable.ItemGetter(self._db_, field.type, v, view))
                         continue
             setattr(self, k, v)
         if self.DB.pk.name not in initial:
@@ -816,7 +816,7 @@ class DBTable(metaclass=MetaTable):
         res = []
         for k, v in vars(self).items():
             if not k.startswith('_'):
-                res.append(f'{k}: {v}')
+                res.append(f'{k}: {str(v)} ({type(v).__name__})')
         return '\n'.join(res)
 
     @classmethod

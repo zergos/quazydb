@@ -305,7 +305,7 @@ if typing.TYPE_CHECKING:
 
 
 class DBQuery:
-    queries: ClassVar[Dict[Hashable, DBQuery]] = {}
+    queries: ClassVar[dict[Hashable, DBQuery]] = {}
 
     class SaveException(Exception):
         pass
@@ -317,13 +317,13 @@ class DBQuery:
         self.fields: OrderedDict[str, DBSQL] = OrderedDict()
         self.fetch_objects: bool = table_class is not None
         self.joins: OrderedDict[str, DBJoin] = OrderedDict()
-        self.sort_list: List[DBSQL] = []
-        self.filters: List[DBSQL] = []
-        self.groups: List[DBSQL] = []
-        self.group_filters: List[DBSQL] = []
+        self.sort_list: list[DBSQL] = []
+        self.filters: list[DBSQL] = []
+        self.groups: list[DBSQL] = []
+        self.group_filters: list[DBSQL] = []
         self.has_aggregates: bool = False
         self.window = (None, None)
-        self.with_queries: List[DBWithClause] = []
+        self.with_queries: list[DBWithClause] = []
         self.args: OrderedDict[str, Any] = OrderedDict()
         self._arg_counter = 0
         self._hash: Optional[Hashable] = None
