@@ -1,16 +1,10 @@
 from __future__ import annotations
 
 import random
-import sys
 import typing
-from decimal import Decimal
 from enum import IntEnum
 from random import randint
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
-from types import SimpleNamespace
-
-sys.path.append(r'D:\projects\bol\quazydb')
 
 from quazy.db import DBFactory, DBTable, DBField, Many, ManyToMany
 from quazy.query import DBQuery, DBQueryField

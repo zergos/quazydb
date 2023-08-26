@@ -480,9 +480,6 @@ class DBQuery:
         self.window = (offset, limit)
         return self
 
-    def __getitem__(self, item: str):
-        return getattr(self.scheme, item)
-
     def sum(self, expr: DBSQL | str | typing.Callable[[SimpleNamespace], DBSQL]) -> DBSQL:
         self.has_aggregates = True
         expr = self.sql(expr)
@@ -541,6 +538,9 @@ class DBQuery:
         self.filters.clear()
         self.filters.append(self.scheme.pk == pk_id)  # type: ignore
         return self.fetchone()
+
+    def __getitem__(self, item: Any) -> DBTable | None:
+        return self.get(item)
 
     def fetchall(self, as_dict: bool = False) -> Any:
         with self.execute(as_dict) as curr:
