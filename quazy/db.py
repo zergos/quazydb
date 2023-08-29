@@ -17,6 +17,7 @@ from .db_types import *
 from .translator import Translator
 
 import typing
+import types
 from typing import ClassVar
 
 if typing.TYPE_CHECKING:
@@ -36,12 +37,14 @@ camel2snake.r = re.compile(
     '((?<=[a-z0-9])[A-Z]|(?!^)(?<!_)[A-Z](?=[a-z]))')  # tnx to https://stackoverflow.com/questions/1175208/elegant-python-function-to-convert-camelcase-to-snake-case
 
 
+T = typing.TypeVar('T', bound='DBTable')
+
 class DBFactory:
     _trans = Translator
 
     def __init__(self, connection_pool, debug_mode: bool = False):
         self._connection_pool: psycopg_pool.ConnectionPool = connection_pool
-        self._tables: list[Type[DBTable]] = list()
+        self._tables: list[type[DBTable]] = list()
         self._debug_mode = debug_mode
 
     @staticmethod
@@ -55,7 +58,7 @@ class DBFactory:
             print(str(e))
         return DBFactory(pool, debug_mode)
 
-    def use(self, cls: Type[DBTable], schema: str = 'public'):
+    def use(self, cls: type[DBTable], schema: str = 'public'):
         if not cls.DB.schema:
             cls.DB.schema = schema
         if cls not in self._tables:
@@ -74,7 +77,7 @@ class DBFactory:
             globalns = sys._getframe(1).f_locals
         if s := globalns.get('_SCHEMA_'):
             schema = s
-        tables: list[Type[DBTable]] = list()
+        tables: list[type[DBTable]] = list()
         for v in globalns.values():
             if inspect.isclass(v) and v is not DBTable and issubclass(v, DBTable) and not v.DB.meta:
                 tables.append(v)
@@ -84,18 +87,18 @@ class DBFactory:
         for table in tables:
             table.resolve_types_many(lambda t: self.use(t, schema))
 
-    def query(self, table_class: Optional[Type[DBTable]] = None) -> DBQuery:
+    def query(self, table_class: Optional[type[T]] = None) -> DBQuery[T]:
         from .query import DBQuery
-        return DBQuery(self, table_class)
+        return DBQuery[T](self, table_class)
 
-    def lookup(self, table_class: Type[DBTable], **fields) -> SimpleNamespace:
+    def lookup(self, table_class: type[T], **fields) -> T:
         query = self.query(table_class)
         query.select_all()
         for k, v in fields.items():
             query.filter(lambda s: getattr(s, k) == v)
         return query.fetchone()
 
-    def get(self, table_class: Type[DBTable], **fields) -> DBTable:
+    def get(self, table_class: type[T], **fields) -> T:
         result = self.lookup(table_class, **fields)
         return result and table_class(**result._asdict())
 
@@ -120,19 +123,30 @@ class DBFactory:
                 for table in tables:
                     conn.execute(f'DROP TABLE {table} CASCADE')
 
-    def all_tables(self, schema: str = None) -> list[typing.Type[DBTable]]:
+    def all_tables(self, schema: str = None, for_stub: bool = False) -> list[type[DBTable]]:
 
         all_tables = self._tables.copy()
         for table in self._tables:
             all_tables.extend(table.DB.subtables.values())
 
-        ext: dict[str, list[Type[DBTable]]] = defaultdict(list)
+        ext: dict[str, list[type[DBTable]]] = defaultdict(list)
         for t in all_tables.copy():
-            if t.DB.extendable:
+            if t.DB.extendable and not for_stub:
                 ext[t.DB.table].append(t)
                 all_tables.remove(t)
             elif schema and t.DB.schema != schema:
                 all_tables.remove(t)
+
+        if for_stub:
+            def add_bases(t):
+                if t not in all_tables:
+                    all_tables.insert(0, t)
+                for base in t.__bases__:
+                    if issubclass(base, DBTable) and base is not DBTable:
+                        add_bases(base)
+
+            for t in all_tables.copy():
+                add_bases(t)
 
         if schema:
             for tname, tables in ext.copy().items():
@@ -143,7 +157,7 @@ class DBFactory:
             fields = {}
             annotations = {}
             field_sources = {}
-            root_class: Type[DBTable] | None = None
+            root_class: type[DBTable] | None = None
             for t in tables:
                 if t.DB.is_root:
                     root_class = t
@@ -162,7 +176,7 @@ class DBFactory:
                 if fname not in annotations:
                     annotations[fname] = f.type
 
-            TableClass: Type[DBTable] = typing.cast(typing.Type[DBTable], type(root_class.__qualname__+"Combined", (DBTable, ), {
+            TableClass: type[DBTable] = typing.cast(type[DBTable], type(root_class.__qualname__+"Combined", (DBTable, ), {
                 '__qualname__': root_class.__qualname__+"Combined",
                 '__module__': root_class.__module__,
                 '__annotations__': annotations,
@@ -174,7 +188,7 @@ class DBFactory:
 
         return all_tables
 
-    def missed_tables(self, schema: str = None) -> list[Type[DBTable]]:
+    def missed_tables(self, schema: str = None) -> list[type[DBTable]]:
         all_tables = self.all_tables(schema)
 
         with self.select(self._trans.select_all_tables()) as created_tables_query:
@@ -215,7 +229,7 @@ class DBFactory:
                         if field.ref and not field.prop:
                             conn.execute(self._trans.add_reference(table, field))
 
-    def insert(self, item: DBTable) -> DBTable:
+    def insert(self, item: T) -> T:
         item._before_insert(self)
         fields: list[tuple[DBField, Any]] = []
         for name, field in item.DB.fields.items():
@@ -278,7 +292,7 @@ class DBFactory:
         item._after_insert(self)
         return item
 
-    def update(self, item: DBTable) -> DBTable:
+    def update(self, item: T) -> T:
         item._before_update(self)
         fields: list[tuple[DBField, Any]] = []
         for name in item._modified_fields_:
@@ -300,7 +314,7 @@ class DBFactory:
         return  item
 
     @contextmanager
-    def select(self, query: Union[DBQuery, str], as_dict: bool = False):
+    def select(self, query: Union[DBQuery, str], as_dict: bool = False) -> Iterator[DBTable | SimpleNamespace]:
         from quazy.query import DBQuery
         with self._connection_pool.connection() as conn:
             if isinstance(query, DBQuery):
@@ -318,7 +332,7 @@ class DBFactory:
                 with conn.cursor(binary=True, row_factory=dict_row if as_dict else namedtuple_row) as curr:
                     yield curr.execute(query)
 
-    def save(self, item: DBTable, lookup_field: str | None = None) -> DBTable:
+    def save(self, item: T, lookup_field: str | None = None) -> T:
         pk_name = item.__class__.DB.pk.name
         if lookup_field:
             row = self.query(item.__class__)\
@@ -347,7 +361,7 @@ class DBFactory:
 class DBField:
     name: str = data_field(default='', init=False)         # field name in Python
     column: str = data_field(default='')                   # field/column name in database
-    type: Union[Type[DBTable], Type[Any]] = data_field(default=None, init=False)  # field type class
+    type: Union[type[DBTable], type[Any]] = data_field(default=None, init=False)  # field type class
     pk: bool = data_field(default=False)                   # is it primary key?
     cid: bool = data_field(default=False)                  # is it storage of table name for inherited tables ?
     ref: bool = data_field(default=False, init=False)      # is it foreign key (reference) ?
@@ -411,19 +425,19 @@ class UX:
 
 @dataclass
 class DBManyField:
-    source_table: Type[DBTable]
+    source_table: type[DBTable]
     source_field: str | None = None
 
 
 @dataclass
 class DBManyToManyField(DBManyField):
-    middle_table: Type[DBTable] | None = None
+    middle_table: type[DBTable] | None = None
 
 
 class MetaTable(type):
     db_base_class: type
 
-    def __new__(cls, clsname: str, bases: tuple[Type[DBTable], ...], attrs: dict[str, Any]):
+    def __new__(cls, clsname: str, bases: tuple[type[DBTable], ...], attrs: dict[str, Any]):
         if clsname == 'DBTable':
             cls.db_base_class = attrs['DB']
             return super().__new__(cls, clsname, bases, attrs)
@@ -437,7 +451,7 @@ class MetaTable(type):
             if value := attrs.pop(src_name, None):
                 spec_attrs[name] = value
                 
-        DB = typing.cast(typing.Type[DBTable.DB], super().__new__(cls, clsname+'DB', (cls.db_base_class, ), spec_attrs))
+        DB = typing.cast(type[DBTable.DB], super().__new__(cls, clsname+'DB', (cls.db_base_class, ), spec_attrs))
         attrs['DB'] = DB
 
         DB.many_fields = dict()
@@ -467,7 +481,7 @@ class MetaTable(type):
         return super().__new__(cls, clsname, bases, attrs)
 
     @staticmethod
-    def collect_fields(bases: tuple[Type[DBTable], ...], DB: Type[DBTable.DB], attrs: dict[str, Any]):
+    def collect_fields(bases: tuple[type[DBTable], ...], DB: type[DBTable.DB], attrs: dict[str, Any]):
 
         if DB.extendable:
             DB.is_root = True
@@ -522,7 +536,7 @@ class MetaTable(type):
         DB.fields = fields
 
     @staticmethod
-    def collect_bases_fields(bases: tuple[Type, ...], DB: Type[DBTable.DB]) -> dict[str, DBField]:
+    def collect_bases_fields(bases: tuple[type, ...], DB: type[DBTable.DB]) -> dict[str, DBField]:
         fields: dict[str, DBField] = dict()
         for base in bases:
             if base is DBTable:
@@ -564,8 +578,8 @@ class DBTable(metaclass=MetaTable):
         cid: ClassVar[DBField] = None          # CID field (if declared)
         is_root: ClassVar[bool] = False        # is root of extendable tree
         discriminator: ClassVar[typing.Any]    # inherited table inner code
-        owner: ClassVar[typing.Union[str, typing.Type[DBTable]]] = None # table owner of sub table
-        subtables: ClassVar[dict[str, typing.Type[DBTable]]] = None   # sub tables list
+        owner: ClassVar[typing.Union[str, type[DBTable]]] = None # table owner of sub table
+        subtables: ClassVar[dict[str, type[DBTable]]] = None   # sub tables list
         meta: ClassVar[bool] = False           # mark table as meta table (abstract) *
         pk: ClassVar[DBField] = None           # reference to primary field
         body: ClassVar[DBField] = None         # reference to body field of None
@@ -575,7 +589,7 @@ class DBTable(metaclass=MetaTable):
         # * marked attributes are able to modify by descendants
 
     class ItemGetter:
-        def __init__(self, db: DBFactory, table: Type[DBTable], pk_id: Any, view: str = None):
+        def __init__(self, db: DBFactory, table: type[DBTable], pk_id: Any, view: str = None):
             self._db = db
             self._table = table
             self._pk_id = pk_id
@@ -605,7 +619,7 @@ class DBTable(metaclass=MetaTable):
 
         # eval owner
         if isinstance(cls.DB.owner, str):
-            base_cls: Type[DBTable] = getattr(sys.modules[cls.__module__], cls.DB.owner)
+            base_cls: type[DBTable] = getattr(sys.modules[cls.__module__], cls.DB.owner)
             # field_name = camel2snake(cls.__name__)
             field = DBField()
             field.set_name(base_cls.DB.table)
@@ -623,7 +637,7 @@ class DBTable(metaclass=MetaTable):
                 t.resolve_types(globalns)
 
     @classmethod
-    def resolve_type(cls, t: Union[Type, typing._GenericAlias], field: DBField, globalns) -> bool | None:
+    def resolve_type(cls, t: Union[type, typing._GenericAlias], field: DBField, globalns) -> bool | None:
         if t in KNOWN_TYPES or inspect.isclass(t) and issubclass(t, IntEnum):
             # Base type
             field.type = t
@@ -656,6 +670,11 @@ class DBTable(metaclass=MetaTable):
                 field.prop = True
                 cls.resolve_type(t.__args__[0], field, globalns)
                 return
+        elif isinstance(t, types.UnionType):
+            if len(t.__args__) == 2 and t.__args__[1] is type(None):
+                field.required = False
+                DBTable.resolve_type(t.__args__[0], field, globalns)
+                return
         elif t is FieldCID:
             field.type = str
             return
@@ -671,10 +690,10 @@ class DBTable(metaclass=MetaTable):
             field.ref = True
             field.type = t
             return
-        raise QuazyFieldTypeError(f'Type {t} is not supported as field type')
+        raise QuazyFieldTypeError(f'type {t} is not supported as field type')
 
     @classmethod
-    def resolve_types_many(cls, add_middle_table: Callable[[Type[DBTable]], Any]):
+    def resolve_types_many(cls, add_middle_table: Callable[[type[DBTable]], Any]):
         # eval refs
         for name, field in cls.DB.fields.items():
             if field.ref:
@@ -711,7 +730,7 @@ class DBTable(metaclass=MetaTable):
             f2.type = cls
             f2.ref = True
 
-            TableClass: Type[DBTable] = typing.cast(typing.Type[DBTable],
+            TableClass: type[DBTable] = typing.cast(type[DBTable],
                 type(middle_table_name, (DBTable,), {
                     '__qualname__': middle_table_name,
                     '__module__': cls.__module__,
@@ -769,7 +788,7 @@ class DBTable(metaclass=MetaTable):
         return super().__setattr__(key, value)
 
     @classmethod
-    def _dump_schema(cls):
+    def _dump_schema(cls) -> dict[str, Any]:
         res = {
             'qualname': cls.__qualname__,
             'module': cls.__module__,
@@ -783,9 +802,9 @@ class DBTable(metaclass=MetaTable):
         return res
 
     @classmethod
-    def _load_schema(cls, state):
+    def _load_schema(cls, state: dict[str, Any]) -> type[DBTable]:
         fields = {name: DBField._load_schema(f) for name, f in state['fields'].items()}
-        TableClass: typing.Type[DBTable] = typing.cast(typing.Type[DBTable], type(state['qualname'], (DBTable, ), {
+        TableClass: type[DBTable] = typing.cast(type[DBTable], type(state['qualname'], (DBTable, ), {
             '__qualname__': state['qualname'],
             '__module__': state['module'],
             '__annotations__': {name: f._pre_type for name, f in fields.items()},
@@ -820,8 +839,14 @@ class DBTable(metaclass=MetaTable):
         return '\n'.join(res)
 
     @classmethod
-    def _view(cls, query: DBQueryField):
+    def _view(cls, item: DBQueryField):
         return None
+
+    def __eq__(self, other):
+        return self.pk == other.pk if isinstance(other, DBTable) else other
+
+    def __ne__(self, other):
+        return self.pk != other.pk if isinstance(other, DBTable) else other
 
     def _before_update(self, db: DBFactory):
         pass

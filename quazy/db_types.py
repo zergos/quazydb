@@ -1,3 +1,4 @@
+import inspect
 import typing
 from typing import Optional
 from datetime import datetime, timedelta, date, time
@@ -6,7 +7,7 @@ from uuid import UUID
 from enum import IntEnum
 
 __all__ = ['Optional', 'datetime', 'timedelta', 'date', 'time', 'Decimal', 'UUID', 'Many', 'DefaultValue', 'KNOWN_TYPES',
-           'db_type_name', 'db_type_by_name', 'FieldCID', 'FieldBody', 'Property', 'ManyToMany']
+           'db_type_name', 'db_type_by_name', 'FieldCID', 'FieldBody', 'Property', 'ManyToMany', 'IntEnum']
 
 
 class DefaultValue:
@@ -69,16 +70,16 @@ class Property(typing.Generic[T]):
     pass
 
 
-def db_type_name(t: typing.Type[typing.Any]) -> str:
+def db_type_name(t: type) -> str:
     if t in KNOWN_TYPES:
         return t.__name__
-    elif issubclass(t, IntEnum):
+    elif inspect.isclass(t) and issubclass(t, IntEnum):
         return 'IntEnum '+t.__name__
     else:
         raise TypeError(f"Unsupported field type {t}")
 
 
-def db_type_by_name(name: str) -> typing.Type[typing.Any] | str:
+def db_type_by_name(name: str) -> type | str:
     if name in TYPE_MAP:
         return TYPE_MAP[name]
     elif name.startswith('IntEnum'):

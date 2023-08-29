@@ -85,7 +85,7 @@ class Translator:
         raise QuazyFieldTypeError(f'Type `{field.type.__name__}` is not supported for serialization')
 
     @classmethod
-    def pk_type_name(cls, ctype: Type) -> str:
+    def pk_type_name(cls, ctype: type) -> str:
         if ctype is int:
             return 'serial'
         if ctype is UUID:
@@ -93,7 +93,7 @@ class Translator:
         raise QuazyTranslatorException(f'Unsupported DB column serial type {ctype}')
 
     @classmethod
-    def column_options(cls, field: DBField, table: Type[DBTable]) -> str:
+    def column_options(cls, field: DBField, table: type[DBTable]) -> str:
         res: list[str] = []
         if field.unique:
             res.append('UNIQUE')
@@ -108,7 +108,7 @@ class Translator:
         return ' '.join(res)
 
     @classmethod
-    def table_name(cls, table: Type[DBTable]) -> str:
+    def table_name(cls, table: type[DBTable]) -> str:
         schema = table.DB.schema + '"."' if table.DB.schema else ''
         return f'"{schema}{table.DB.table}"'
 
@@ -122,17 +122,17 @@ class Translator:
         return subquery.name
 
     @classmethod
-    def create_index(cls, table: Type[DBTable], field: DBField) -> str:
+    def create_index(cls, table: type[DBTable], field: DBField) -> str:
         unique = 'UNIQUE' if field.unique else ''
         return f'CREATE {unique} INDEX IF NOT EXISTS {table.DB.table}_{field.column}_index ON {cls.table_name(table)} ("{field.column}")'
 
     @classmethod
-    def drop_index(cls, table: Type[DBTable], field: DBField) -> str:
+    def drop_index(cls, table: type[DBTable], field: DBField) -> str:
         res = f'DROP INDEX {table.DB.table}_{field.column}_index'
         return res
 
     @classmethod
-    def set_default_value(cls, table: Type[DBTable], field: DBField, sql_value: str) -> str:
+    def set_default_value(cls, table: type[DBTable], field: DBField, sql_value: str) -> str:
         res = f'ALTER TABLE {cls.table_name(table)} ALTER COLUMN {field.column} SET DEFAULT {sql_value}'
         return res
 
@@ -141,7 +141,7 @@ class Translator:
         return f'CREATE SCHEMA IF NOT EXISTS {name}'
 
     @classmethod
-    def create_table(cls, table: Type[DBTable]) -> str:
+    def create_table(cls, table: type[DBTable]) -> str:
         cols = ', '.join(
             f'"{field.column}" {cls.type_name(field)} {cls.column_options(field, table)}'
             for field in table.DB.fields.values()
@@ -152,28 +152,28 @@ class Translator:
         return res
 
     @classmethod
-    def add_field(cls, table: Type[DBTable], field: DBField):
+    def add_field(cls, table: type[DBTable], field: DBField):
         col = f'"{field.column}" {cls.type_name(field)} {cls.column_options(field)}'
         res = f'ALTER TABLE {cls.table_name(table)} ADD COLUMN {col}'
         return res
 
     @classmethod
-    def drop_field(cls, table: Type[DBTable], field: DBField):
+    def drop_field(cls, table: type[DBTable], field: DBField):
         res = f'ALTER TABLE {cls.table_name(table)} DROP COLUMN {field.column}'
         return res
 
     @classmethod
-    def rename_field(cls, table: Type[DBTable], old_name: str, new_name: str):
+    def rename_field(cls, table: type[DBTable], old_name: str, new_name: str):
         res = f'ALTER TABLE {cls.table_name(table)} RENAME COLUMN {old_name} TO {new_name}'
         return res
 
     @classmethod
-    def alter_field_type(cls, table: Type[DBTable], field: DBField):
+    def alter_field_type(cls, table: type[DBTable], field: DBField):
         res = f'ALTER TABLE {cls.table_name(table)} ALTER COLUMN {field.column} TYPE {cls.type_name(field)} USING {field.column}::{cls.type_name(field)}'
         return res
 
     @classmethod
-    def drop_table(cls, table: Type[DBTable]) -> str:
+    def drop_table(cls, table: type[DBTable]) -> str:
         res = f'DROP TABLE {cls.table_name(table)}'
         return res
 
@@ -183,7 +183,7 @@ class Translator:
         return res
 
     @classmethod
-    def add_reference(cls, table: Type[DBTable], field: DBField) -> str:
+    def add_reference(cls, table: type[DBTable], field: DBField) -> str:
         if not field.ref:
             raise QuazyTranslatorException(f'Field {field.name} is not reference')
         if field.required:
@@ -194,19 +194,19 @@ class Translator:
         return res
 
     @classmethod
-    def drop_reference(cls, table: Type[DBTable], field: DBField) -> str:
+    def drop_reference(cls, table: type[DBTable], field: DBField) -> str:
         if not field.ref:
             raise QuazyTranslatorException(f'Field {field.name} is not reference')
         res = f'ALTER TABLE {cls.table_name(table)} DROP CONSTRAINT fk_{table.DB.table}_{field.column}'
         return res
 
     @classmethod
-    def set_not_null(cls, table: Type[DBTable], field: DBField) -> str:
+    def set_not_null(cls, table: type[DBTable], field: DBField) -> str:
         res = f'ALTER TABLE {cls.table_name(table)} ALTER COLUMN {field.column} SET NOT NULL'
         return res
 
     @classmethod
-    def drop_not_null(cls, table: Type[DBTable], field: DBField) -> str:
+    def drop_not_null(cls, table: type[DBTable], field: DBField) -> str:
         res = f'ALTER TABLE {cls.table_name(table)} ALTER COLUMN {field.column} DROP NOT NULL'
         return res
 
@@ -221,7 +221,7 @@ class Translator:
         return value
 
     @classmethod
-    def insert(cls, table: Type[DBTable], fields: list[tuple[DBField, Any]]) -> tuple[str, dict[str, any]]:
+    def insert(cls, table: type[DBTable], fields: list[tuple[DBField, Any]]) -> tuple[str, dict[str, Any]]:
         sql_values: list[str] = []
         values: dict[str, Any] = {}
         body_values: dict[str, Any] = {}
@@ -232,7 +232,7 @@ class Translator:
                     continue
                 if field.pk:
                     sql_values.append('DEFAULT')
-                elif value == DefaultValue:
+                elif value is DefaultValue:
                     if field.default is None:
                         sql_values.append('DEFAULT')
                     else:
@@ -250,7 +250,7 @@ class Translator:
             else:  # prop
                 if field.default_sql:
                     body_values[field.name] = field.default_sql
-                elif value == DefaultValue:
+                elif value is DefaultValue:
                     if field.default in None:
                         body_values[field.name] = 'null'
                     else:
@@ -286,15 +286,15 @@ class Translator:
         return res, values
 
     @classmethod
-    def clear(cls, table: Type[DBTable]) -> str:
+    def clear(cls, table: type[DBTable]) -> str:
         return f'TRUNCATE {cls.table_name(table)}'
 
     @classmethod
-    def delete_related(cls, table: Type[DBTable], column: str) -> str:
+    def delete_related(cls, table: type[DBTable], column: str) -> str:
         return f'DELETE FROM {cls.table_name(table)} WHERE "{column}" = %s'
 
     @classmethod
-    def update(cls, table: Type[DBTable], fields: list[tuple[DBField, Any]]) -> tuple[str, dict[str, any]]:
+    def update(cls, table: type[DBTable], fields: list[tuple[DBField, Any]]) -> tuple[str, dict[str, Any]]:
         sql_values: list[str] = []
         values: dict[str, Any] = {}
         idx = 2
@@ -433,7 +433,7 @@ class Translator:
         )"""
 
     @classmethod
-    def select_many_indices(cls, middle_table: Type[DBTable], primary_index: str, secondary_index: str) -> str:
+    def select_many_indices(cls, middle_table: type[DBTable], primary_index: str, secondary_index: str) -> str:
         return f'''SELECT array_agg("{secondary_index}") FROM
             {cls.table_name(middle_table)}
         WHERE
@@ -441,7 +441,7 @@ class Translator:
         '''
 
     @classmethod
-    def delete_many_indices(cls, middle_table: Type[DBTable], primary_index: str, secondary_index: str) -> str:
+    def delete_many_indices(cls, middle_table: type[DBTable], primary_index: str, secondary_index: str) -> str:
         return f'''DELETE FROM
             {cls.table_name(middle_table)}
         WHERE
@@ -450,7 +450,7 @@ class Translator:
         '''
 
     @classmethod
-    def insert_many_index(cls, middle_table: Type[DBTable], primary_index: str, secondary_index: str) -> str:
+    def insert_many_index(cls, middle_table: type[DBTable], primary_index: str, secondary_index: str) -> str:
         return f'''INSERT INTO
             {cls.table_name(middle_table)} ("{primary_index}", "{secondary_index}")
         VALUES

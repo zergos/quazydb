@@ -7,10 +7,9 @@ try:
 except ImportError:
     from strenum import StrEnum  # noqa
 from enum import auto
-from typing import NamedTuple, Any, Type
+from typing import NamedTuple, Any
 
 from .db import DBFactory, DBTable, DBField
-from .query import DBQuery
 from .db_types import datetime
 from .exceptions import *
 
@@ -113,7 +112,7 @@ class MigrationCommand(NamedTuple):
         return {'command': self.command, 'subject': args}
 
     @classmethod
-    def load(cls, data: dict[str, typing.Any], tables: dict[str, Type[DBTable]]):
+    def load(cls, data: dict[str, typing.Any], tables: dict[str, type[DBTable]]):
         args = []
         for arg in data['subject']:
             if arg[0] == 'DBTable':
@@ -129,7 +128,7 @@ class MigrationCommand(NamedTuple):
         return cls(command=data['command'], subject=tuple(args))
 
 
-def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] | None = None) -> tuple[list[MigrationCommand], list[Type[DBTable]]]:
+def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] | None = None) -> tuple[list[MigrationCommand], list[type[DBTable]]]:
     db.use_module(__name__)
 
     commands: list[MigrationCommand] = []
@@ -145,10 +144,10 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
         return [MigrationCommand(MigrationType.INITIAL, (None, ))], db.all_tables(schema)
 
     # load last schema
-    tables_old: dict[str, Type[DBTable]] = {}
+    tables_old: dict[str, type[DBTable]] = {}
     data = json.loads(last_migration.tables)
     for chunk in data:
-        SomeTable: Type[DBTable] = DBTable._load_schema(chunk)
+        SomeTable: type[DBTable] = DBTable._load_schema(chunk)
         tables_old |= {SomeTable.__qualname__: SomeTable}
 
     globalns = tables_old.copy()
@@ -166,7 +165,7 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
             if f.ref and f.type.DB.schema != schema:
                 fields = {fname: field for fname, field in f.type.DB.fields.items() if field.pk or field.cid}
                 annotations = {fname: annot for fname, annot in f.type.__annotations__.items() if fname in fields}
-                ShortClass = typing.cast(typing.Type[DBTable], type(f.type.__qualname__, (DBTable, ), {
+                ShortClass = typing.cast(type[DBTable], type(f.type.__qualname__, (DBTable, ), {
                     '__qualname__': f.type.__qualname__,
                     '__module__': f.type.__module__,
                     '__annotations__': annotations,
@@ -255,7 +254,7 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
     return commands, db.all_tables(schema)
 
 
-def apply_changes(db: DBFactory, schema: str, commands: list[MigrationCommand], all_tables: list[Type[DBTable]], comments: str = "", debug: bool = False):
+def apply_changes(db: DBFactory, schema: str, commands: list[MigrationCommand], all_tables: list[type[DBTable]], comments: str = "", debug: bool = False):
 
     if not commands:
         return

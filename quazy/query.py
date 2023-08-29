@@ -9,20 +9,20 @@ from collections import OrderedDict
 from enum import Enum
 import copy
 
-from quazy.db import DBFactory, DBField, DBTable
+from quazy.db import DBFactory, DBField, DBTable, T
 from quazy.exceptions import *
 
 if typing.TYPE_CHECKING:
     from typing import *
 
 
-__all__ = ['DBQuery', 'DBScheme']
+__all__ = ['DBQuery', 'DBScheme', 'DBQueryField']
 
 
 class DBQueryField:
-    def __init__(self, query: DBQuery, table: Type[DBTable], path: str = None, field: DBField = None):
+    def __init__(self, query: DBQuery, table: type[DBTable], path: str = None, field: DBField = None):
         self._query: DBQuery = query
-        self._table: Type[DBTable] = table
+        self._table: type[DBTable] = table
         self._path: str = path or table.DB.snake_name
         self._field: DBField = field
 
@@ -285,7 +285,7 @@ class DBJoinKind(Enum):
 
 @dataclass
 class DBJoin:
-    source: Union[Type[DBTable], DBQuery]
+    source: Union[type[DBTable], DBQuery]
     kind: DBJoinKind
     condition: Optional[Union[str, DBSQL]] = data_field(default=None)
 
@@ -304,16 +304,16 @@ if typing.TYPE_CHECKING:
     FDBSQL = DBSQL | Callable[[SimpleNamespace], DBSQL] | str | int
 
 
-class DBQuery:
+class DBQuery(typing.Generic[T]):
     queries: ClassVar[dict[Hashable, DBQuery]] = {}
 
     class SaveException(Exception):
         pass
 
-    def __init__(self, db: DBFactory, table_class: Optional[Type[DBTable]] = None, name: str = ''):
+    def __init__(self, db: DBFactory, table_class: Optional[type[T]] = None, name: str = ''):
         self.name = name or f'q{id(self)}'
         self.db: DBFactory = db
-        self.table_class: Type[DBTable] | None = table_class
+        self.table_class: type[T] | None = table_class
         self.fields: OrderedDict[str, DBSQL] = OrderedDict()
         self.fetch_objects: bool = table_class is not None
         self.joins: OrderedDict[str, DBJoin] = OrderedDict()
@@ -428,7 +428,7 @@ class DBQuery:
                 self.args[k] = v
         return DBSubqueryField(self, subquery)
 
-    def select(self, *field_names: str, **fields: FDBSQL) -> DBQuery:
+    def select(self, *field_names: str, **fields: FDBSQL) -> DBQuery[T]:
         if self.fetch_objects:
             if 'pk' not in field_names:
                 self.fetch_objects = False
@@ -441,17 +441,17 @@ class DBQuery:
             self.fields[field_name] = self.sql(field_value)
         return self
 
-    def select_all(self) -> DBQuery:
+    def select_all(self) -> DBQuery[T]:
         self.fetch_objects = False
         self.fields['*'] = DBSQL(self, '*')
         return self
 
-    def sort_by(self, *fields: FDBSQL, desc: bool = False) -> DBQuery:
+    def sort_by(self, *fields: FDBSQL, desc: bool = False) -> DBQuery[T]:
         for field in fields:
             self.sort_list.append(self.sql(field) if not desc else self.sql(field).postfix('DESC'))
         return self
 
-    def filter(self, _expression: FDBSQL = None, **kwargs) -> DBQuery:
+    def filter(self, _expression: FDBSQL = None, **kwargs) -> DBQuery[T]:
         if _expression is not None:
             self.filters.append(self.sql(_expression))
         if kwargs and self.table_class is None:
@@ -460,23 +460,23 @@ class DBQuery:
             self.filters.append(getattr(self.scheme, k) == v)
         return self
 
-    def exclude(self, **kwargs) -> DBQuery:
+    def exclude(self, **kwargs) -> DBQuery[T]:
         if self.table_class in None:
             raise QuazyError('Query is not associated with table, cat not filter by field names')
         for k, v in kwargs.items():
             self.filters.append(getattr(self.scheme, k) != v)
         return self
 
-    def group_filter(self, expression: FDBSQL) -> DBQuery:
+    def group_filter(self, expression: FDBSQL) -> DBQuery[T]:
         self.group_filters.append(self.sql(expression))
         return self
 
-    def group_by(self, *fields: FDBSQL) -> DBQuery:
+    def group_by(self, *fields: FDBSQL) -> DBQuery[T]:
         for field in fields:
             self.groups.append(DBSQL(self, self.sql(field)))
         return self
 
-    def set_window(self, offset: int | None = None, limit: int | None = None) -> DBQuery:
+    def set_window(self, offset: int | None = None, limit: int | None = None) -> DBQuery[T]:
         self.window = (offset, limit)
         return self
 
@@ -528,21 +528,21 @@ class DBQuery:
         with self.db.select(self) as rows:
             yield from rows
 
-    def fetchone(self, as_dict: bool = False) -> Any:
+    def fetchone(self, as_dict: bool = False) -> T | Any:
         with self.execute(as_dict) as curr:
             return curr.fetchone()
 
-    def get(self, pk_id: Any) -> DBTable | None:
+    def get(self, pk_id: Any) -> T | None:
         if not self.fetch_objects:
             raise QuazyWrongOperation("`get` possible for objects query")
         self.filters.clear()
         self.filters.append(self.scheme.pk == pk_id)  # type: ignore
         return self.fetchone()
 
-    def __getitem__(self, item: Any) -> DBTable | None:
+    def __getitem__(self, item: Any) -> T | None:
         return self.get(item)
 
-    def fetchall(self, as_dict: bool = False) -> Any:
+    def fetchall(self, as_dict: bool = False) -> list[T | Any]:
         with self.execute(as_dict) as curr:
             return curr.fetchall()
 

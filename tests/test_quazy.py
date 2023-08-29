@@ -6,14 +6,13 @@ from enum import IntEnum
 from random import randint
 from datetime import datetime, timedelta
 
-from quazy.db import DBFactory, DBTable, DBField, Many, ManyToMany
+from quazy.db import DBFactory, DBTable, DBField
 from quazy.query import DBQuery, DBQueryField
+from quazy.stub import gen_stub
+from quazy.db_types import FieldCID, FieldBody, Property, Many, ManyToMany
 
-from quazy.db_types import FieldCID, FieldBody, Property
-
-from typing import Optional
-if typing.TYPE_CHECKING:
-    from typing import *
+#if typing.TYPE_CHECKING:
+#    from typing import *
 
 
 class NamedTable(DBTable):
@@ -43,7 +42,7 @@ class Unit(NamedTable):
 
 class Item(NamedTable):
     base_unit: Unit
-    description: Optional[str]
+    description: str | None
     #cities: Many[City]
 
     class Unit(DBTable):
@@ -68,8 +67,8 @@ class Catalog(DBTable):
     name: str
 
     @classmethod
-    def _view(cls, query: DBQueryField):
-        return query.name
+    def _view(cls, item: DBQueryField):
+        return item.name
 
 
 class ItemCatalog(Catalog):
@@ -207,5 +206,8 @@ if __name__ == '__main__':
     print(repr(j_out))
 
     print(j_out.group.random_id)
+
+    with open("test_quazy.pyi", "wt") as f:
+        f.write(gen_stub(db))
 
     print('Done')
