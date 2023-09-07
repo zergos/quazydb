@@ -217,7 +217,7 @@ class DBFactory:
             return
 
         all_schemas = set()
-        for table in self._tables:
+        for table in all_tables:
             if table.DB.schema:
                 all_schemas.add(table.DB.schema)
 
