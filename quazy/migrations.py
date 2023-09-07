@@ -48,7 +48,7 @@ def clear_migrations(db: DBFactory, schema: str = None):
     db.clear(schema or _SCHEMA_)
 
     if schema:
-        db.delete(table=Migration, filter=lambda x: x.schema == schema)
+        db.delete(Migration, filter=lambda x: x.schema == schema)
 
 
 def get_migrations(db: DBFactory, schema: str) -> list[tuple[bool, int, datetime, str]]:
