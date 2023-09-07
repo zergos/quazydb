@@ -359,10 +359,9 @@ class DBFactory:
                 self.insert(item)
         return item
 
-    def delete(self, *,
+    def delete(self, table: type[DBTable] = None, *,
                item: T = None,
                id: Any = None,
-               table: type[DBTable] = None,
                items: typing.Iterator[T] = None,
                query: DBQuery[T] = None,
                filter: Callable[[T], DBSQL] = None,

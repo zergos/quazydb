@@ -217,7 +217,7 @@ if __name__ == '__main__':
             unit = pack
         db.insert(Item(name=f"Item{i}", base_unit=unit))
 
-    db.delete(table=Item, filter=lambda x: x.base_unit == qty)
+    db.delete(Item, filter=lambda x: x.base_unit == qty)
 
     query = db.query(Item).select("name", unit=lambda x: x.base_unit.name)
     print(query.fetchall())
