@@ -67,6 +67,7 @@ def gen_stub(db: DBFactory, schema: str = None) -> str:
     table_chunks = {}
     modules = []
     imports: dict[str, set] = defaultdict(set)
+    imports["import"].add("typing")
     enums = set()
 
     for table in db.all_tables(schema, for_stub=True):
@@ -80,7 +81,7 @@ def gen_stub(db: DBFactory, schema: str = None) -> str:
             if field.prop:
                 field_type = f'{type_name(field.type)}'
             elif field.body:
-                field_type = 'dict[str, Any]'
+                field_type = 'dict[str, typing.Any]'
             elif field.cid:
                 field_type = f'{type_name(field.type)}'
             elif not field.required:

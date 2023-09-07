@@ -11,7 +11,7 @@ import typing
 if typing.TYPE_CHECKING:
     from typing import *
     from .db import DBTable, DBField
-    from .query import DBQuery, DBSQL, DBJoinKind, DBWithClause, DBQueryField
+    from .query import DBQuery, DBSQL, DBJoinKind, DBWithClause, DBQueryField, DBSubqueryField
 
 
 class Translator:
@@ -345,7 +345,7 @@ class Translator:
         return sql
 
     @classmethod
-    def select(cls, query: DBQuery):
+    def select(cls, query: DBQuery) -> str:
         from .query import DBJoinKind, DBQueryField
         from .db import DBTable
 
@@ -411,6 +411,21 @@ class Translator:
             sql += f'LIMIT {query.window[1]}\n'
 
         # sql = sql % dict((key, f'%({key})s') for key in query.args.keys())
+        return sql
+
+    @classmethod
+    def delete(cls, table: type[DBTable]) -> str:
+        return f'DELETE FROM {cls.table_name(table)}'
+
+    @classmethod
+    def delete_selected(cls, query: DBQuery, subquery: DBSubqueryField) -> str:
+        sql = ''
+        if query.with_queries:
+            sql += cls.with_select(query.with_queries)
+
+        sql += f'''DELETE FROM {cls.table_name(query.table_class)} USING "{subquery._path}"
+        WHERE {cls.table_name(query.table_class)}."{query.table_class.DB.pk.name}" = "{subquery._path}"."{query.table_class.DB.pk.name}"'''
+
         return sql
 
     @classmethod

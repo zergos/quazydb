@@ -374,9 +374,6 @@ class DBQuery(typing.Generic[T]):
         if self._hash:
             DBQuery.queries[self._hash] = self
 
-    def _get_query_scheme(self):
-        res = SimpleNamespace()
-
     @contextmanager
     def get_scheme(self) -> SimpleNamespace:
         yield self.scheme
@@ -457,14 +454,14 @@ class DBQuery(typing.Generic[T]):
         if kwargs and self.table_class is None:
             raise QuazyError('Query is not associated with table, cat not filter by field names')
         for k, v in kwargs.items():
-            self.filters.append(getattr(self.scheme, k) == v)
+            self.filters.append(getattr(self.scheme, k) == v)  # noqa
         return self
 
     def exclude(self, **kwargs) -> DBQuery[T]:
         if self.table_class in None:
             raise QuazyError('Query is not associated with table, cat not filter by field names')
         for k, v in kwargs.items():
-            self.filters.append(getattr(self.scheme, k) != v)
+            self.filters.append(getattr(self.scheme, k) != v)  # noqa
         return self
 
     def group_filter(self, expression: FDBSQL) -> DBQuery[T]:
@@ -480,7 +477,7 @@ class DBQuery(typing.Generic[T]):
         self.window = (offset, limit)
         return self
 
-    def sum(self, expr: DBSQL | str | typing.Callable[[SimpleNamespace], DBSQL]) -> DBSQL:
+    def sum(self, expr: DBSQL | str | typing.Callable[[T], DBSQL]) -> DBSQL:
         self.has_aggregates = True
         expr = self.sql(expr)
         return expr.aggregate('sum')
@@ -548,7 +545,9 @@ class DBQuery(typing.Generic[T]):
 
     def fetchvalue(self) -> Any:
         with self.execute() as curr:
-            return curr.fetchone()[0]
+            if (one:=curr.fetchone()) is not None:
+                return one[0]
+            return None
 
     def fetchlist(self) -> list[Any]:
         with self.execute() as curr:
@@ -565,8 +564,6 @@ class DBQuery(typing.Generic[T]):
         return obj.fetchone().result
 
     def fetch_count(self, expr: FDBSQL = None):
-        #if len(self.fields) > 0:
-        #    raise QuazyError(f'Use `fetch_count` as single field')
         obj = self.copy()
         obj.fields.clear()
         obj.fetch_objects = False

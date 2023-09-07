@@ -6,7 +6,6 @@ import inspect
 from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass, field as data_field
-from enum import IntEnum
 
 import psycopg
 import psycopg_pool
@@ -17,16 +16,15 @@ from .db_types import *
 from .translator import Translator
 
 import typing
-import types
 from typing import ClassVar
+import types
 
 if typing.TYPE_CHECKING:
     from typing import *
     from types import SimpleNamespace
-    import asyncpg
-    from .query import DBQuery, DBQueryField
+    from .query import DBQuery, DBQueryField, DBSQL
 
-__all__ = ['DBFactory', 'DBField', 'DBTable', 'UX', 'Many']
+__all__ = ['DBFactory', 'DBField', 'DBTable', 'UX', 'Many', 'ManyToMany']
 
 
 def camel2snake(name: str) -> str:
@@ -39,6 +37,7 @@ camel2snake.r = re.compile(
 
 T = typing.TypeVar('T', bound='DBTable')
 
+
 class DBFactory:
     _trans = Translator
 
@@ -48,7 +47,7 @@ class DBFactory:
         self._debug_mode = debug_mode
 
     @staticmethod
-    def postgres(**kwargs) -> DBFactory:
+    def postgres(**kwargs) -> DBFactory | None:
         debug_mode = kwargs.pop("debug_mode", False)
         conninfo = kwargs.pop("conninfo")
         try:
@@ -56,6 +55,7 @@ class DBFactory:
             pool.wait()
         except Exception as e:
             print(str(e))
+            return None
         return DBFactory(pool, debug_mode)
 
     def use(self, cls: type[DBTable], schema: str = 'public'):
@@ -109,12 +109,15 @@ class DBFactory:
         self._connection_pool.putconn(conn)
 
     @contextmanager
-    def connection(self) -> psycopg.Connection:
-        with self._connection_pool.connection() as conn:
-            yield conn
+    def connection(self, reuse_conn: psycopg.Connection = None) -> psycopg.Connection:
+        if reuse_conn is not None:
+            yield reuse_conn
+        else:
+            with self._connection_pool.connection() as conn:
+                yield conn
 
     def clear(self, schema: str = None):
-        with self._connection_pool.connection() as conn:  # type: psycopg.Connection
+        with self.connection() as conn:  # type: psycopg.Connection
             tables = []
             for res in conn.execute(self._trans.select_all_tables()):
                 if not schema or schema == res[0]:
@@ -204,6 +207,10 @@ class DBFactory:
     def check(self, schema: str = None) -> bool:
         return len(self.missed_tables(schema)) == 0
 
+    def table_exists(self, table: DBTable) -> bool:
+        with self.select(self._trans.is_table_exists(table)) as res:
+            return res.fetchone()[0]
+
     def create(self, schema: str = None):
         all_tables = self.missed_tables(schema)
         if not all_tables:
@@ -214,7 +221,7 @@ class DBFactory:
             if table.DB.schema:
                 all_schemas.add(table.DB.schema)
 
-        with self._connection_pool.connection() as conn:  # type: psycopg.Connection
+        with self.connection() as conn:  # type: psycopg.Connection
             with conn.transaction():
                 for schema in all_schemas:
                     conn.execute(self._trans.create_schema(schema))
@@ -245,7 +252,7 @@ class DBFactory:
             else:
                 fields.append((field, getattr(item, name, DefaultValue)))
 
-        with self._connection_pool.connection() as conn:  # type: psycopg.Connection
+        with self.connection() as conn:  # type: psycopg.Connection
 
             sql, values = self._trans.insert(item.__class__, fields)
             item.pk = conn.execute(sql, values).fetchone()[0]
@@ -298,7 +305,7 @@ class DBFactory:
         for name in item._modified_fields_:
             field = item.DB.fields[name]
             fields.append((field, getattr(item, name, DefaultValue)))
-        with self._connection_pool.connection() as conn:
+        with self.connection() as conn:
             sql, values = self._trans.update(item.__class__, fields)
             if not values:
                 return item
@@ -311,12 +318,12 @@ class DBFactory:
                 for row in getattr(item, table.DB.snake_name):
                     self.insert(row)
         item._after_update(self)
-        return  item
+        return item
 
     @contextmanager
     def select(self, query: Union[DBQuery, str], as_dict: bool = False) -> Iterator[DBTable | SimpleNamespace]:
         from quazy.query import DBQuery
-        with self._connection_pool.connection() as conn:
+        with self.connection() as conn:
             if isinstance(query, DBQuery):
                 sql = self._trans.select(query)
                 if self._debug_mode: print(sql)
@@ -335,13 +342,13 @@ class DBFactory:
     def save(self, item: T, lookup_field: str | None = None) -> T:
         pk_name = item.__class__.DB.pk.name
         if lookup_field:
-            row = self.query(item.__class__)\
+            row_id = self.query(item.__class__)\
                 .filter(lambda x: getattr(x, lookup_field) == getattr(item, lookup_field))\
                 .set_window(limit=1)\
                 .select(pk_name)\
-                .fetchone()
-            if row:
-                setattr(item, pk_name, row[0])
+                .fetchvalue()
+            if row_id:
+                setattr(item, pk_name, row_id)
                 self.update(item)
             else:
                 self.insert(item)
@@ -352,9 +359,50 @@ class DBFactory:
                 self.insert(item)
         return item
 
-    def table_exists(self, table: DBTable) -> bool:
-        with self.select(self._trans.is_table_exists(table)) as res:
-            return res.fetchone()[0]
+    def delete(self, *,
+               item: T = None,
+               id: Any = None,
+               table: type[DBTable] = None,
+               items: typing.Iterator[T] = None,
+               query: DBQuery[T] = None,
+               filter: Callable[[T], DBSQL] = None,
+               reuse_conn: psycopg.Connection = None):
+        if id is not None:
+            if table is None:
+                raise QuazyWrongOperation("Both `id` and `table` should be specified")
+            with self.connection(reuse_conn) as conn:
+                sql = self._trans.delete_related(table, table.DB.pk.name)
+                conn.execute(sql, (id, ))
+        elif item is not None:
+            item._before_delete(self)
+            with self.connection(reuse_conn) as conn:
+                sql = self._trans.delete_related(type(item), item.DB.pk.name)
+                conn.execute(sql, (item.pk, ))
+            item._after_delete(self)
+        elif items is not None:
+            with self.connection(reuse_conn) as conn:
+                for item in items:
+                    self.delete(item=item, reuse_conn=conn)
+        elif query is not None:
+            if not query.fetch_objects:
+                raise QuazyWrongOperation('Query should be objects related')
+            builder = self.query(query.table_class)
+            sub = builder.with_query(query.select("pk"), not_materialized=True)
+            with self.connection(reuse_conn) as conn:
+                sql = self._trans.delete_selected(builder, sub)
+                if self._debug_mode: print(sql)
+                conn.execute(sql, builder.args)
+        elif filter is not None:
+            if table is None:
+                raise QuazyWrongOperation("Both `filter` and `table` should be specified")
+            query = self.query(table).filter(filter)
+            self.delete(query=query)
+        elif table is not None:
+            with self.connection(reuse_conn) as conn:
+                sql = self._trans.delete(table)
+                conn.execute(sql)
+        else:
+            raise QuazyWrongOperation('Specify one of the arguments')
 
 
 @dataclass
@@ -519,6 +567,7 @@ class MetaTable(type):
                 field = DBField(default=field)
                 field.set_name(name)
                 field.type = t
+                field.required = False
 
             fields[name] = field
 
@@ -848,14 +897,9 @@ class DBTable(metaclass=MetaTable):
     def __ne__(self, other):
         return self.pk != other.pk if isinstance(other, DBTable) else other
 
-    def _before_update(self, db: DBFactory):
-        pass
-
-    def _after_update(self, db: DBFactory):
-        pass
-
-    def _before_insert(self, db: DBFactory):
-        pass
-
-    def _after_insert(self, db: DBFactory):
-        pass
+    def _before_update(self, db: DBFactory): ...
+    def _after_update(self, db: DBFactory): ...
+    def _before_insert(self, db: DBFactory): ...
+    def _after_insert(self, db: DBFactory): ...
+    def _before_delete(self, db: DBFactory): ...
+    def _after_delete(self, db: DBFactory): ...

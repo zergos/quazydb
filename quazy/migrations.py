@@ -13,7 +13,7 @@ from .db import DBFactory, DBTable, DBField
 from .db_types import datetime
 from .exceptions import *
 
-__all__ = ["check_migrations", "activate_migrations", "get_migrations", "get_changes", "apply_changes"]
+__all__ = ["check_migrations", "activate_migrations", "get_migrations", "get_changes", "apply_changes", "clear_migrations"]
 
 _SCHEMA_ = "migrations"
 
@@ -43,12 +43,20 @@ def activate_migrations(db: DBFactory):
     db.create(_SCHEMA_)
 
 
+def clear_migrations(db: DBFactory, schema: str = None):
+    db.use_module(__name__)
+    db.clear(schema or _SCHEMA_)
+
+    if schema:
+        db.delete(table=Migration, filter=lambda x: x.schema == schema)
+
+
 def get_migrations(db: DBFactory, schema: str) -> list[tuple[bool, int, datetime, str]]:
-    current = db.query(MigrationVersion).filter(lambda x: x.schema == schema).select("index").fetchone()
-    current_index = current[0] if current else -1
+    current = db.query(MigrationVersion).filter(schema=schema).select("index").fetchvalue()
+    current_index = current if current is not None else -1
 
     res = []
-    for row in db.query(Migration).filter(lambda x: x.schema == schema).select("index", "created_at", "comments"):
+    for row in db.query(Migration).filter(schema=schema).select("index", "created_at", "comments"):
         res.append((row.index == current_index, row.index, row.created, row.comments))
 
     return res
