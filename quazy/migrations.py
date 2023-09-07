@@ -83,23 +83,23 @@ class MigrationCommand(NamedTuple):
             case MigrationType.INITIAL:
                 return f"Initial migration"
             case MigrationType.ADD_TABLE:
-                return f"Add table {self.subject[0].__qualname__}"
+                return f"Add table `{self.subject[0].__qualname__}`"
             case MigrationType.DELETE_TABLE:
-                return f"Delete table {self.subject[0].__qualname__}"
+                return f"Delete table `{self.subject[0].__qualname__}`"
             case MigrationType.RENAME_TABLE:
-                return f"Rename table {self.subject[1]} to {self.subject[2]}"
+                return f"Rename table `{self.subject[1]}` to `{self.subject[2]}`"
             case MigrationType.ADD_FIELD:
-                return f"Add field {self.subject[1].name} to table {self.subject[0].__qualname__}"
+                return f"Add field `{self.subject[1].name}` to table `{self.subject[0].__qualname__}`"
             case MigrationType.DELETE_FIELD:
-                return f"Delete field {self.subject[1].name} from table {self.subject[0].__qualname__}"
+                return f"Delete field `{self.subject[1].name}` from table `{self.subject[0].__qualname__}`"
             case MigrationType.RENAME_FIELD:
-                return f"Rename field {self.subject[1]} to {self.subject[2]} at table {self.subject[0].__qualname__}"
+                return f"Rename field `{self.subject[1]}` to `{self.subject[2]}` at table `{self.subject[0].__qualname__}`"
             case MigrationType.ALTER_FIELD_TYPE:
-                return f"Alter field type {self.subject[1].name} from {self.subject[2]} to {self.subject[3]} at table {self.subject[0].__qualname__}"
+                return f"Alter field type `{self.subject[1].name}` from `{self.subject[2]}` to `{self.subject[3]}` at table `{self.subject[0].__qualname__}`"
             case MigrationType.ALTER_FIELD_FLAG:
-                return f"Alter field {self.subject[1].name} flag {self.subject[2]} to value {self.subject[3]} at table {self.subject[0].__qualname__}"
+                return f"Alter field `{self.subject[1].name}` flag `{self.subject[2]}` to value `{self.subject[3]}` at table `{self.subject[0].__qualname__}`"
             case _:
-                return f"Custom command: {self.command} {self.subject}"
+                return f"Custom command: `{self.command}` `{self.subject}`"
 
     def save(self) -> dict[str, typing.Any]:
         args = []
