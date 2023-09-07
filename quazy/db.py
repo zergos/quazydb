@@ -423,6 +423,10 @@ class DBField:
     # many_field: bool = data_field(default=False, init=False)
     ux: Optional[UX] = data_field(default=None)            # UX/UI options
 
+    def __post_init__(self):
+        if self.default is not None or self.default_sql is not None:
+            self.required = False
+
     def set_name(self, name: str):
         self.name = name
         if not self.column:
@@ -450,8 +454,8 @@ class DBField:
     def _load_schema(cls, state: dict[str, Any]) -> DBField:
         name = state.pop('name')
         f_type = state.pop('type')
-        ref = state.pop('ref')
-        required = state.pop('required')
+        ref = state.pop('ref', False)
+        required = state.pop('required', False)
         field = DBField(**state)
         field.set_name(name)
         field.ref = ref
