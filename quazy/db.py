@@ -497,7 +497,7 @@ class MetaTable(type):
             raise QuazyError(f'Should not define `DB` subclass directly in `{clsname}`, use `_name_` form')
 
         spec_attrs = {}
-        for name in 'table schema just_for_typing extendable discriminator meta'.split():
+        for name in 'table title schema just_for_typing extendable discriminator meta'.split():
             src_name = f'_{name}_'
             if value := attrs.pop(src_name, None):
                 spec_attrs[name] = value
@@ -611,6 +611,7 @@ class MetaTable(type):
 class DBTable(metaclass=MetaTable):
     # initial attributes
     _table_: ClassVar[str]
+    _title_: ClassVar[str]
     _schema_: ClassVar[str]
     _just_for_typing_: ClassVar[str]
     _extendable_: ClassVar[bool]
@@ -623,6 +624,7 @@ class DBTable(metaclass=MetaTable):
 
     class DB:
         table: ClassVar[str] = None            # Database table name *
+        title: ClassVar[str] = None            # Table title for UI
         schema: ClassVar[str] = None           # Database schema name *
         just_for_typing: ClassVar[bool] = False # Mark table as virtual (defined inline for foreign schema imports)
         snake_name: ClassVar[str]              # "snake" style table name in plural
