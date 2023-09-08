@@ -102,17 +102,21 @@ class MigrationCommand(NamedTuple):
                 return f"Custom command: `{self.command}` `{self.subject}`"
 
     def save(self) -> dict[str, typing.Any]:
+
+        def add_arg(typ: str, val: Any):
+            args.append({'type': typ, 'value': val})
+
         args = []
         if self.subject:
             for arg in self.subject:
                 if inspect.isclass(arg) and issubclass(arg, DBTable):
-                    args.append(('DBTable', arg.__qualname__))
+                    add_arg('DBTable', arg.__qualname__)
                 elif isinstance(arg, DBField):
-                    args.append(('DBField', arg.name))
+                    add_arg('DBField', arg.name)
                 elif isinstance(arg, str):
-                    args.append(('str', arg))
+                    add_arg('str', arg)
                 elif type(arg) is bool:
-                    args.append(('bool', str(arg)))
+                    add_arg('bool', str(arg))
                 elif arg is None:
                     pass
                 else:
@@ -123,14 +127,14 @@ class MigrationCommand(NamedTuple):
     def load(cls, data: dict[str, typing.Any], tables: dict[str, type[DBTable]]):
         args = []
         for arg in data['subject']:
-            if arg[0] == 'DBTable':
-                args.append(tables[arg[1]])
-            elif arg[0] == 'DBField':
-                args.append(args[0].DB.fields[arg[0]])
-            elif arg[0] == 'str':
-                args.append(arg)
-            elif arg[0] == 'bool':
-                args.append(arg[1] == 'True')
+            if arg['type'] == 'DBTable':
+                args.append(tables[arg['value']])
+            elif arg['type'] == 'DBField':
+                args.append(args[0].DB.fields[arg['value']])
+            elif arg['type'] == 'str':
+                args.append(arg['value'])
+            elif arg['type'] == 'bool':
+                args.append(arg['value'] == 'True')
             else:
                 raise QuazyError('Wrong arg type in command loading')
         return cls(command=data['command'], subject=tuple(args))
