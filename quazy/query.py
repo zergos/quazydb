@@ -520,6 +520,10 @@ class DBQuery(typing.Generic[T]):
         with self.db.select(self, as_dict) as curr:
             yield curr
 
+    def describe(self) -> list[DBField]:
+        self._check_fields()
+        return self.db.describe(self)
+
     def __iter__(self):
         self._check_fields()
         with self.db.select(self) as rows:

@@ -30,6 +30,20 @@ class Translator:
         IntEnum: 'int',
     }
 
+    TYPES_BY_OID = {
+        23: int,
+        701: float,
+        25: str,
+        17: bytes,
+        1114: datetime,
+        1083: time,
+        1082: date,
+        1186: timedelta,
+        16: bool,
+        3802: json,
+        2950: UUID,
+    }
+
     @classmethod
     def type_name(cls, field: DBField, primary: bool = True) -> str:
         if field.pk and primary:

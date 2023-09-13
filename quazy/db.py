@@ -339,6 +339,45 @@ class DBFactory:
                 with conn.cursor(binary=True, row_factory=dict_row if as_dict else namedtuple_row) as curr:
                     yield curr.execute(query)
 
+    def describe(self, query: Union[DBQuery[T], str]) -> list[DBField]:
+        from quazy.query import DBQuery
+        from psycopg.rows import no_result
+        if typing.TYPE_CHECKING:
+            from psycopg.cursor import BaseCursor, RowMaker
+            from psycopg.rows import DictRow
+
+        def types_row(cursor: BaseCursor[Any, DictRow]) -> RowMaker[DictRow]:
+            desc = cursor.description
+            if desc is None:
+                return no_result
+
+            has_fields = isinstance(query, DBQuery) and query.table_class is not None
+            for col in desc:
+                if has_fields and (field:=query.table_class.DB.fields.get(col.name)) is not None:
+                    res.append(field)
+                else:
+                    field = DBField(col.name)
+                    field.prepare(col.name)
+                    field.type = self._trans.TYPES_BY_OID[col.type_code]
+                    res.append(field)
+
+            return no_result
+
+        res = []
+        with self.connection() as conn:
+            if isinstance(query, DBQuery):
+                query = query.copy().set_window(limit=0)
+                sql = self._trans.select(query)
+                if self._debug_mode: print(sql)
+                with conn.cursor(binary=True, row_factory=types_row) as curr:
+                    curr.execute(sql, query.args)
+            else:
+                with conn.cursor(binary=True, row_factory=types_row) as curr:
+                    curr.execute(query)
+
+        return res
+
+
     def save(self, item: T, lookup_field: str | None = None) -> T:
         pk_name = item.__class__.DB.pk.name
         if lookup_field:
@@ -427,7 +466,7 @@ class DBField:
         if self.default is not None or self.default_sql is not None:
             self.required = False
 
-    def set_name(self, name: str):
+    def prepare(self, name: str):
         self.name = name
         if not self.column:
             self.column = self.name
@@ -435,6 +474,7 @@ class DBField:
             self.ux = UX(self.name)
         elif not self.ux.title:
             self.ux.title = self.name
+        self.ux.field = self
 
     def _dump_schema(self) -> dict[str, Any]:
         res = {
@@ -457,7 +497,7 @@ class DBField:
         ref = state.pop('ref', False)
         required = state.pop('required', False)
         field = DBField(**state)
-        field.set_name(name)
+        field.prepare(name)
         field.ref = ref
         field.required = required
         field._pre_type = db_type_by_name(f_type)
@@ -466,12 +506,16 @@ class DBField:
 
 @dataclass
 class UX:
+    field: DBField = data_field(init=False)
     title: str = data_field(default='')
     width: int = data_field(default=None)
     choices: Mapping = data_field(default=None)
     blank: bool = data_field(default=False)
     readonly: bool = data_field(default=False)
     multiline: bool = data_field(default=False)
+    hidden: bool = data_field(default=False)
+    sortable: bool = data_field(default=True)
+    resizable: bool = data_field(default=True)
 
 
 @dataclass
@@ -545,7 +589,7 @@ class MetaTable(type):
                 continue
             field = attrs.pop(name, DBField())
             if isinstance(field, DBField):
-                field.set_name(name)
+                field.prepare(name)
                 if not field.type:
                     field.type = t
                 if field.pk:
@@ -568,7 +612,7 @@ class MetaTable(type):
                     DB.body = field
             else:
                 field = DBField(default=field)
-                field.set_name(name)
+                field.prepare(name)
                 field.type = t
                 field.required = False
 
@@ -580,7 +624,7 @@ class MetaTable(type):
 
         if not has_pk:
             pk = DBField(pk=True)
-            pk.set_name('id')
+            pk.prepare('id')
             pk.type = int
             fields['id'] = pk
             DB.pk = pk
@@ -676,7 +720,7 @@ class DBTable(metaclass=MetaTable):
             base_cls: type[DBTable] = getattr(sys.modules[cls.__module__], cls.DB.owner)
             # field_name = camel2snake(cls.__name__)
             field = DBField()
-            field.set_name(base_cls.DB.table)
+            field.prepare(base_cls.DB.table)
             field.type = base_cls
             field.ref = True
             field.required = True
@@ -776,11 +820,11 @@ class DBTable(metaclass=MetaTable):
                 raise QuazyFieldNameError(f'Cannot reuse ManyToMany field in table `{field.source_table.__name__}` with name `{rev_name}`, it is associated with table `{field.source_table.DB.many_to_many_fields[rev_name].source_table.__name__}`. Set different `reverse_name`.')
 
             f1 = DBField(field.source_table.DB.table, indexed=True)
-            f1.set_name(f1.column)
+            f1.prepare(f1.column)
             f1.type = field.source_table
             f1.ref = True
             f2 = DBField(cls.DB.table, indexed=True)
-            f2.set_name(f2.column)
+            f2.prepare(f2.column)
             f2.type = cls
             f2.ref = True
 
@@ -816,9 +860,6 @@ class DBTable(metaclass=MetaTable):
         for k, v in initial.items():
             if k.endswith("__view"):
                 continue
-            if k not in self.DB.fields and k not in self.DB.many_fields and k not in self.DB.many_to_many_fields:
-                raise QuazyFieldNameError(f'Wrong field name `{k}` in new instance of `{self.__class__.__name__}`')
-            # TODO: validate types
             if self._db_:
                 if field := self.DB.fields.get(k):
                     if issubclass(field.type, IntEnum):
@@ -828,6 +869,10 @@ class DBTable(metaclass=MetaTable):
                         view = initial.get(f'{k}__view', None)
                         setattr(self, k, DBTable.ItemGetter(self._db_, field.type, v, view))
                         continue
+            else:
+                if k not in self.DB.fields and k not in self.DB.many_fields and k not in self.DB.many_to_many_fields:
+                    raise QuazyFieldNameError(f'Wrong field name `{k}` in new instance of `{self.__class__.__name__}`')
+            # TODO: validate types
             setattr(self, k, v)
         if self.DB.pk.name not in initial:
             self.pk = None
@@ -885,7 +930,7 @@ class DBTable(metaclass=MetaTable):
     def pk(self, value):
         setattr(self, self.DB.pk.name, value)
 
-    def __repr__(self):
+    def inspect(self):
         res = []
         for k, v in vars(self).items():
             if not k.startswith('_'):

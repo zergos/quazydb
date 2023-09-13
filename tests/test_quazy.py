@@ -203,7 +203,7 @@ if __name__ == '__main__':
     j = db.insert(Journal(name="Racoon", title="Racoons life ep. 1", price=1.99, group=g, pub_date=datetime.utcnow(), cc=Journal.ContentClass.HIGHLIGHTS))
 
     j_out = db.query(Journal).fetchone()
-    print(repr(j_out))
+    print(j_out.inspect())
 
     print(j_out.group.random_id)
 
@@ -219,7 +219,12 @@ if __name__ == '__main__':
 
     db.delete(Item, filter=lambda x: x.base_unit == qty)
 
-    query = db.query(Item).select("name", unit=lambda x: x.base_unit.name)
+    query = db.query(Item).select("name", "base_unit", unit=lambda x: x.base_unit.name)
+
+    fields = query.describe()
+    for f in fields:
+        print(f'{f.name} - {f.type.__name__}')
+
     print(query.fetchall())
 
     print('Done')
