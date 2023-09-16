@@ -142,6 +142,9 @@ class DBSQL:
     def func2(self, op: str, other: Any) -> DBSQL:
         return self.sql(f'{op}({self.sql_text}, {self.query.arg(other)!r})')
 
+    def func3(self, op: str, second: Any, third: Any) -> DBSQL:
+        return self.sql(f'{op}({self.sql_text}, {self.query.arg(second)!r}, {self.query.arg(third)!r})')
+
     def cast(self, type_name: str) -> DBSQL:
         return self.sql(f'{self.sql_text}::{type_name}')
     
@@ -151,6 +154,8 @@ class DBSQL:
     def __getitem__(self, item):
         if item is int:
             return self.sql(f'{self.sql_text}[{item}]')
+        elif isinstance(item, slice):
+            return self.substr(item.start, item.stop-item.start+1)
         else:
             return self.sql(f"{self.sql_text}->'{item}'")
 
@@ -273,6 +278,33 @@ class DBSQL:
 
     def __repr__(self):
         return self.sql_text
+
+    def upper(self) -> DBSQL:
+        return self.func1('upper')
+
+    def lower(self) -> DBSQL:
+        return self.func1('lower')
+
+    def __len__(self):
+        return self.func2('length', 'UTF8')
+
+    def left(self, n: int) -> DBSQL:
+        return self.func2('left', n)
+
+    def right(self, n: int) -> DBSQL:
+        return self.func2('right', n)
+
+    def startswith(self, s: str) -> DBSQL:
+        return self.left(len(s)) == s
+
+    def endswith(self, s: str) -> DBSQL:
+        return self.right(len(s)) == s
+
+    def substr(self, pos: int, length: int = None) -> DBSQL:
+        if length is None:
+            return self.func2('substr', pos)
+        else:
+            return self.func3('substr', pos, length)
 
 
 class DBJoinKind(Enum):
