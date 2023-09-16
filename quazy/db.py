@@ -91,16 +91,13 @@ class DBFactory:
         from .query import DBQuery
         return DBQuery[T](self, table_class)
 
-    def lookup(self, table_class: type[T], **fields) -> T:
+    def get(self, table_class: type[T], pk: Any = None, **fields) -> T:
         query = self.query(table_class)
-        query.select_all()
+        if pk is not None:
+            query.filter(pk=pk)
         for k, v in fields.items():
             query.filter(lambda s: getattr(s, k) == v)
         return query.fetchone()
-
-    def get(self, table_class: type[T], **fields) -> T:
-        result = self.lookup(table_class, **fields)
-        return result and table_class(**result._asdict())
 
     def get_connection(self) -> psycopg.Connection:
         return self._connection_pool.getconn()
