@@ -16,7 +16,6 @@ from .db_types import *
 from .translator import Translator
 
 import typing
-from typing import ClassVar
 import types
 
 if typing.TYPE_CHECKING:
@@ -651,36 +650,36 @@ class MetaTable(type):
 
 class DBTable(metaclass=MetaTable):
     # initial attributes
-    _table_: ClassVar[str]
-    _title_: ClassVar[str]
-    _schema_: ClassVar[str]
-    _just_for_typing_: ClassVar[str]
-    _extendable_: ClassVar[bool]
-    _discriminator_: ClassVar[typing.Any]
-    _meta_: ClassVar[bool]
+    _table_: typing.ClassVar[str]
+    _title_: typing.ClassVar[str]
+    _schema_: typing.ClassVar[str]
+    _just_for_typing_: typing.ClassVar[str]
+    _extendable_: typing.ClassVar[bool]
+    _discriminator_: typing.ClassVar[typing.Any]
+    _meta_: typing.ClassVar[bool]
 
     # state attributes
     _db_: DBFactory | None
     _modified_fields_: set[str]
 
     class DB:
-        table: ClassVar[str] = None            # Database table name *
-        title: ClassVar[str] = None            # Table title for UI
-        schema: ClassVar[str] = None           # Database schema name *
-        just_for_typing: ClassVar[bool] = False # Mark table as virtual (defined inline for foreign schema imports)
-        snake_name: ClassVar[str]              # "snake" style table name in plural
-        extendable: ClassVar[bool] = False     # support for extendable classes
-        cid: ClassVar[DBField] = None          # CID field (if declared)
-        is_root: ClassVar[bool] = False        # is root of extendable tree
-        discriminator: ClassVar[typing.Any]    # inherited table inner code
-        owner: ClassVar[typing.Union[str, type[DBTable]]] = None # table owner of sub table
-        subtables: ClassVar[dict[str, type[DBTable]]] = None   # sub tables list
-        meta: ClassVar[bool] = False           # mark table as meta table (abstract) *
-        pk: ClassVar[DBField] = None           # reference to primary field
-        body: ClassVar[DBField] = None         # reference to body field of None
-        many_fields: ClassVar[dict[str, DBManyField]] = None
-        many_to_many_fields: ClassVar[dict[str, DBManyToManyField]] = None
-        fields: ClassVar[dict[str, DBField]] = None  # list of all fields
+        table: typing.ClassVar[str] = None            # Database table name *
+        title: typing.ClassVar[str] = None            # Table title for UI
+        schema: typing.ClassVar[str] = None           # Database schema name *
+        just_for_typing: typing.ClassVar[bool] = False # Mark table as virtual (defined inline for foreign schema imports)
+        snake_name: typing.ClassVar[str]              # "snake" style table name in plural
+        extendable: typing.ClassVar[bool] = False     # support for extendable classes
+        cid: typing.ClassVar[DBField] = None          # CID field (if declared)
+        is_root: typing.ClassVar[bool] = False        # is root of extendable tree
+        discriminator: typing.ClassVar[typing.Any]    # inherited table inner code
+        owner: typing.ClassVar[typing.Union[str, type[DBTable]]] = None # table owner of sub table
+        subtables: typing.ClassVar[dict[str, type[DBTable]]] = None   # sub tables list
+        meta: typing.ClassVar[bool] = False           # mark table as meta table (abstract) *
+        pk: typing.ClassVar[DBField] = None           # reference to primary field
+        body: typing.ClassVar[DBField] = None         # reference to body field of None
+        many_fields: typing.ClassVar[dict[str, DBManyField]] = None
+        many_to_many_fields: typing.ClassVar[dict[str, DBManyToManyField]] = None
+        fields: typing.ClassVar[dict[str, DBField]] = None  # list of all fields
         # * marked attributes are able to modify by descendants
 
     class ItemGetter:
