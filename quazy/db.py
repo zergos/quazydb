@@ -442,21 +442,21 @@ class DBFactory:
 @dataclass
 class DBField:
     name: str = data_field(default='', init=False)         # field name in Python
-    column: str = data_field(default='')                   # field/column name in database
+    column: str = ''                                       # field/column name in database
     type: Union[type[DBTable], type[Any]] = data_field(default=None, init=False)  # field type class
-    pk: bool = data_field(default=False)                   # is it primary key?
-    cid: bool = data_field(default=False)                  # is it storage of table name for inherited tables ?
+    pk: bool = False                                       # is it primary key?
+    cid: bool = False                                      # is it storage of table name for inherited tables ?
     ref: bool = data_field(default=False, init=False)      # is it foreign key (reference) ?
-    body: bool = data_field(default=False)                 # is it body field for properties?
-    prop: bool = data_field(default=False)                 # is it property field?
+    body: bool = False                                     # is it body field for properties?
+    prop: bool = False                                     # is it property field?
     required: bool = data_field(default=True, init=False)  # is field not null ?
-    indexed: bool = data_field(default=False)              # is it indexed for fast search ?
-    unique: bool = data_field(default=False)               # is it unique ?
-    default: Union[Any, Callable[[], Any]] = data_field(default=None)  # default value at Python level
-    default_sql: str = data_field(default=None)            # default value at SQL level
-    reverse_name: str = data_field(default=None)           # reverse name for reference fields
+    indexed: bool = False                                  # is it indexed for fast search ?
+    unique: bool = False                                   # is it unique ?
+    default: Union[Any, Callable[[], Any]] = None          # default value at Python level
+    default_sql: str = None                                # default value at SQL level
+    reverse_name: str = None                               # reverse name for reference fields
     # many_field: bool = data_field(default=False, init=False)
-    ux: Optional[UX] = data_field(default=None)            # UX/UI options
+    ux: Optional[UX] = None                                # UX/UI options
 
     def __post_init__(self):
         if self.default is not None or self.default_sql is not None:
@@ -503,15 +503,15 @@ class DBField:
 @dataclass
 class UX:
     field: DBField = data_field(init=False)
-    title: str = data_field(default='')
-    width: int = data_field(default=None)
-    choices: Mapping = data_field(default=None)
-    blank: bool = data_field(default=False)
-    readonly: bool = data_field(default=False)
-    multiline: bool = data_field(default=False)
-    hidden: bool = data_field(default=False)
-    sortable: bool = data_field(default=True)
-    resizable: bool = data_field(default=True)
+    title: str = ''
+    width: int = None
+    choices: Mapping = None
+    blank: bool = False
+    readonly: bool = False
+    multiline: bool = False
+    hidden: bool = False
+    sortable: bool = True
+    resizable: bool = True
 
 
 @dataclass

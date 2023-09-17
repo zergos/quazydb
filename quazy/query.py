@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass, field as data_field
+from dataclasses import dataclass
 import typing
 from inspect import currentframe
 from types import SimpleNamespace
@@ -319,7 +319,7 @@ class DBJoinKind(Enum):
 class DBJoin:
     source: Union[type[DBTable], DBQuery]
     kind: DBJoinKind
-    condition: Optional[Union[str, DBSQL]] = data_field(default=None)
+    condition: Optional[Union[str, DBSQL]] = None
 
 
 @dataclass
