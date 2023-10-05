@@ -615,4 +615,3 @@ class DBQuery(typing.Generic[T]):
     def fetch_avg(self, expr: FDBSQL) -> typing.Any:
         return self.fetch_aggregate('avg', expr)
 
-
