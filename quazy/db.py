@@ -443,7 +443,7 @@ class DBFactory:
 class DBField:
     name: str = data_field(default='', init=False)         # field name in Python
     column: str = ''                                       # field/column name in database
-    type: Union[type[DBTable], type[Any]] = data_field(default=None, init=False)  # field type class
+    type: Union[type[DBTable], type[Any]] = data_field(default=None, init=False)  # noqa field type class
     pk: bool = False                                       # is it primary key?
     cid: bool = False                                      # is it storage of table name for inherited tables ?
     ref: bool = data_field(default=False, init=False)      # is it foreign key (reference) ?
@@ -468,8 +468,13 @@ class DBField:
             self.column = self.name
         if not self.ux:
             self.ux = UX(self.name)
-        elif not self.ux.title:
-            self.ux.title = self.name
+        else:
+            if not self.ux.name:
+                self.ux.name = self.name
+            if self.ux.type is None:
+                self.ux.type = self.type
+            if not self.ux.title:
+                self.ux.title = self.name
         self.ux.field = self
 
     def _dump_schema(self) -> dict[str, Any]:
@@ -503,6 +508,8 @@ class DBField:
 @dataclass
 class UX:
     field: DBField = data_field(init=False)
+    name: str = ''
+    type: type = None
     title: str = ''
     width: int = None
     choices: Mapping = None
