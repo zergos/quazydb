@@ -520,6 +520,9 @@ class UX:
     sortable: bool = True
     resizable: bool = True
 
+    def __post_init__(self):
+        if self.name and not self.title:
+            self.title = self.name
 
 @dataclass
 class DBManyField:
