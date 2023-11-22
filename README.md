@@ -1,2 +1,2 @@
 # quazydb
-Powerfull and simple Python ORM
+Powerful yet simple Python ORM
