@@ -5,4 +5,6 @@ from .query import __all__ as query__all__
 from .db_types import *
 from .db_types import __all__ as db_types__all__
 
+VERSION = "1.0.0"
+
 __all__ = [*db__all__, *query__all__, *db_types__all__]

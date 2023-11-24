@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quazydb"
+license = {text = "Apache 2.0"}
+authors = [
+    {name = "Andrey Aseev", email = "invent@zergos.ru"}
+]
+maintainers = [
+    {name = "Andrey Aseev", email = "invent@zergos.ru"}
+]
+urls = {Homepage = "https://github.com/zergos/pantra"}
+description = "Powerful yet simple Python ORM"
+dependencies = [
+    'psycopg-binary>=3.0.1',
+    'psycopg-pool>=3.0',
+    'PyYAML>=6.0.1',
+    'jsonpickle>=2.0.0',
+]
+requires-python = ">=3.10"
+dynamic = ["version", "readme"]
+
+[tool.setuptools]
+package-dir = {pantra = "quazy"}
+
+[tool.setuptools.dynamic]
+version = {attr = "quazy.VERSION"}
+readme = {file = ["README.md"]}
