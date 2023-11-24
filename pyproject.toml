@@ -23,7 +23,7 @@ requires-python = ">=3.10"
 dynamic = ["version", "readme"]
 
 [tool.setuptools]
-package-dir = {pantra = "quazy"}
+package-dir = {quazy = "quazy"}
 
 [tool.setuptools.dynamic]
 version = {attr = "quazy.VERSION"}
