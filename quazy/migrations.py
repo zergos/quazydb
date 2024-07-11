@@ -2,15 +2,12 @@ import inspect
 import json
 import os
 import typing
-try:
-    from enum import StrEnum
-except ImportError:
-    from strenum import StrEnum  # noqa
+from datetime import datetime
 from enum import auto
 from typing import NamedTuple, Any
 
 from .db import DBFactory, DBTable, DBField
-from .db_types import datetime
+from .db_types import StrEnum
 from .exceptions import *
 
 __all__ = ["check_migrations", "activate_migrations", "get_migrations", "get_changes", "apply_changes", "clear_migrations"]

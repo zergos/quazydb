@@ -2,11 +2,10 @@ import sys
 import inspect
 import typing
 import ast
-from enum import IntEnum
 from collections import defaultdict
 
 from .db import DBFactory, DBTable
-from .db_types import db_type_name
+from .db_types import db_type_name, IntEnum, StrEnum, Enum
 
 
 def gen_stub(db: DBFactory, schema: str = None) -> str:
@@ -14,7 +13,7 @@ def gen_stub(db: DBFactory, schema: str = None) -> str:
     def type_name(t) -> str:
         if inspect.isclass(t) and issubclass(t, DBTable):
             return '"'+t.__qualname__+'"'
-        if inspect.isclass(t) and issubclass(t, IntEnum):
+        if inspect.isclass(t) and issubclass(t, Enum):
             enums.add(t)
             return '"'+t.__qualname__+'"'
         return db_type_name(t)
@@ -117,8 +116,8 @@ def gen_stub(db: DBFactory, schema: str = None) -> str:
 
     enum_chunks = ['']
     for enum in enums:  # type: typing.Type[IntEnum]
-        field_chunks = [f'\t{v.name} = {v.value}' for v in enum]
-        enum_line = f'class {enum.__name__}(IntEnum):\n' + '\n'.join(field_chunks)
+        field_chunks = [f'\t{v.name} = {v.value!r}' for v in enum]
+        enum_line = f'class {enum.__name__}({enum.__bases__[0].__name__}):\n' + '\n'.join(field_chunks)
         names = enum.__qualname__.split('.')
         if len(names) == 1:
             enum_chunks.append(enum_line)

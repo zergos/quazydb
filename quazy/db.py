@@ -58,6 +58,7 @@ class DBFactory:
         return DBFactory(pool, debug_mode)
 
     def use(self, cls: type[DBTable], schema: str = 'public'):
+        cls.DB.db = self
         if not cls.DB.schema:
             cls.DB.schema = schema
         if cls not in self._tables:
@@ -85,6 +86,18 @@ class DBFactory:
             table.resolve_types(globalns)
         for table in tables:
             table.resolve_types_many(lambda t: self.use(t, schema))
+
+    def __contains__(self, item: str | DBTable) -> bool:
+        if isinstance(item, str):
+            return any(item == table.__qualname__ for table in self._tables)
+        else:
+            return item in self._tables
+        
+    def __getitem__(self, item: str) -> DBTable:
+        for table in self._tables:
+            if table.__qualname__ == item:
+                return table
+        raise KeyError(item)
 
     def query(self, table_class: Optional[type[T]] = None) -> DBQuery[T]:
         from .query import DBQuery
@@ -179,6 +192,7 @@ class DBFactory:
                 '__qualname__': root_class.__qualname__+"Combined",
                 '__module__': root_class.__module__,
                 '__annotations__': annotations,
+                '_db_': self,
                 '_table_': root_class.DB.table,
                 '_extendable_': True,
                 **fields
@@ -536,7 +550,7 @@ class DBManyToManyField(DBManyField):
 
 
 class MetaTable(type):
-    db_base_class: type
+    db_base_class: type[DBTable.DB]
 
     def __new__(cls, clsname: str, bases: tuple[type[DBTable], ...], attrs: dict[str, Any]):
         if clsname == 'DBTable':
@@ -547,7 +561,7 @@ class MetaTable(type):
             raise QuazyError(f'Should not define `DB` subclass directly in `{clsname}`, use `_name_` form')
 
         spec_attrs = {}
-        for name in 'table title schema just_for_typing extendable discriminator meta'.split():
+        for name in 'db table title schema just_for_typing extendable discriminator meta'.split():
             src_name = f'_{name}_'
             if value := attrs.pop(src_name, None):
                 spec_attrs[name] = value
@@ -657,6 +671,12 @@ class MetaTable(type):
 
         return fields
 
+    def __getitem__(cls, item: type[DBTable]):
+        if not cls.DB.db:
+            raise QuazyWrongOperation("Table is not assigned to a database")
+
+        return cls.DB.db.get(cls, item)
+
 
 class DBTable(metaclass=MetaTable):
     # initial attributes
@@ -673,6 +693,7 @@ class DBTable(metaclass=MetaTable):
     _modified_fields_: set[str]
 
     class DB:
+        db: typing.ClassVar[DBFactory] | None = None # Database owner, if specified
         table: typing.ClassVar[str] = None            # Database table name *
         title: typing.ClassVar[str] = None            # Table title for UI
         schema: typing.ClassVar[str] = None           # Database schema name *
@@ -742,7 +763,7 @@ class DBTable(metaclass=MetaTable):
 
     @classmethod
     def resolve_type(cls, t: Union[type, typing._GenericAlias], field: DBField, globalns) -> bool | None:
-        if t in KNOWN_TYPES or inspect.isclass(t) and issubclass(t, IntEnum):
+        if t in KNOWN_TYPES or inspect.isclass(t) and issubclass(t, Enum):
             # Base type
             field.type = t
             return
@@ -853,10 +874,9 @@ class DBTable(metaclass=MetaTable):
             field.source_table.DB.many_to_many_fields[rev_name].middle_table = TableClass
             field.source_table.DB.many_to_many_fields[rev_name].source_field = f1.column
 
-
     def __init__(self, **initial):
         self._modified_fields_: set[str] | None = None
-        self._db_ = initial.pop('_db_', None)
+        self._db_: DBFactory = initial.pop('_db_', self.DB.db)
         #self.id: Union[None, int, UUID] = None
         #for field_name, field in self.fields.items():
         #    if field.many_field:
@@ -868,16 +888,17 @@ class DBTable(metaclass=MetaTable):
                 continue
             if self._db_:
                 if field := self.DB.fields.get(k):
-                    if issubclass(field.type, IntEnum):
+                    if issubclass(field.type, Enum):
                         setattr(self, k, field.type(v))
                         continue
                     elif field.ref:
                         view = initial.get(f'{k}__view', None)
                         setattr(self, k, DBTable.ItemGetter(self._db_, field.type, v, view))
                         continue
-            else:
-                if k not in self.DB.fields and k not in self.DB.many_fields and k not in self.DB.many_to_many_fields:
-                    raise QuazyFieldNameError(f'Wrong field name `{k}` in new instance of `{self.__class__.__name__}`')
+            #else:
+            if k not in self.DB.fields and k not in self.DB.many_fields and k not in self.DB.many_to_many_fields:
+                raise QuazyFieldNameError(f'Wrong field name `{k}` in new instance of `{self.__class__.__name__}`')
+
             # TODO: validate types
             setattr(self, k, v)
         if self.DB.pk.name not in initial:
@@ -891,6 +912,12 @@ class DBTable(metaclass=MetaTable):
             if self._modified_fields_ is not None:
                 self._modified_fields_.add(key)
         return super().__setattr__(key, value)
+
+    @classmethod
+    def get(cls, item):
+        if not cls.DB.db:
+            raise QuazyWrongOperation("Table is not assigned to a database")
+        return cls.DB.db.get(cls, item)
 
     @classmethod
     def _dump_schema(cls) -> dict[str, Any]:

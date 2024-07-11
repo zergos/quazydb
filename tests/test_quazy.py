@@ -134,6 +134,9 @@ if __name__ == '__main__':
     krasnodar = City(name='Krasnodar')
     db.insert(krasnodar)
 
+    k = City[krasnodar.pk]
+    print(k)
+
     novoross = City(name='Novorossiysk')
     db.insert(novoross)
 

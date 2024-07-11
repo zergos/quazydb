@@ -28,6 +28,7 @@ class Translator:
         dict: 'jsonb',
         UUID: 'uuid',
         IntEnum: 'int',
+        StrEnum: 'text',
     }
 
     TYPES_BY_OID = {
@@ -50,8 +51,8 @@ class Translator:
             return cls.pk_type_name(field.type)
         if field.type in cls.TYPES_MAP:
             return cls.TYPES_MAP[field.type]
-        if inspect.isclass(field.type) and issubclass(field.type, IntEnum):
-            return cls.TYPES_MAP[IntEnum]
+        if inspect.isclass(field.type) and issubclass(field.type, Enum):
+            return cls.TYPES_MAP[field.type.__bases__[0]]
         # TODO: Decimal
         # TODO: array
         if field.ref:
