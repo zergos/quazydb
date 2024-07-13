@@ -78,6 +78,7 @@ class Property(typing.Generic[T]):
     pass
 
 class Text(DBField):
+    type = str
     class UX(UX):
         multiline = True
 
