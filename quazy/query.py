@@ -9,8 +9,10 @@ from collections import OrderedDict
 from enum import Enum
 import copy
 
-from quazy.db import DBFactory, DBField, DBTable, T
-from quazy.exceptions import *
+from .db_factory import DBFactory, T
+from .db_table import DBTable
+from .db_field import DBField
+from .exceptions import *
 
 if typing.TYPE_CHECKING:
     from typing import *
@@ -61,6 +63,9 @@ class DBQueryField:
             return DBQueryField(self._query, table, join_path)
 
         raise QuazyFieldNameError(f'field `{item}` is not found in `{DB.table}`')
+    
+    def __getitem__(self, item):
+        return getattr(self, item)
 
     def __str__(self):
         return self._path

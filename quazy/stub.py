@@ -4,7 +4,8 @@ import typing
 import ast
 from collections import defaultdict
 
-from .db import DBFactory, DBTable
+from .db_factory import DBFactory
+from .db_table import DBTable
 from .db_types import db_type_name, IntEnum, StrEnum, Enum
 
 

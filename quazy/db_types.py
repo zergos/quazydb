@@ -10,6 +10,8 @@ try:
 except ImportError:
     from strenum import StrEnum  # noqa
 
+from .db_field import DBField, UX
+
 __all__ = ['Optional', 'datetime', 'timedelta', 'date', 'time', 'Decimal', 'UUID', 'Many', 'DefaultValue', 'KNOWN_TYPES',
            'db_type_name', 'db_type_by_name', 'FieldCID', 'FieldBody', 'Property', 'ManyToMany', 'IntEnum', 'StrEnum',
            'Enum']
@@ -75,6 +77,9 @@ class FieldBody:
 class Property(typing.Generic[T]):
     pass
 
+class Text(DBField):
+    class UX(UX):
+        multiline = True
 
 def db_type_name(t: type) -> str:
     if t in KNOWN_TYPES:

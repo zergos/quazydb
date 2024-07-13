@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import auto
 from typing import NamedTuple, Any
 
-from .db import DBFactory, DBTable, DBField
+from . import DBFactory, DBTable, DBField
 from .db_types import StrEnum
 from .exceptions import *
 

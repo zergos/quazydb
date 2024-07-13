@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import inspect
-from enum import IntEnum
 
 from .db_types import *
 from .exceptions import *
@@ -10,7 +9,7 @@ from .exceptions import *
 import typing
 if typing.TYPE_CHECKING:
     from typing import *
-    from .db import DBTable, DBField
+    from . import DBTable, DBField
     from .query import DBQuery, DBSQL, DBJoinKind, DBWithClause, DBQueryField, DBSubqueryField
 
 
@@ -362,7 +361,7 @@ class Translator:
     @classmethod
     def select(cls, query: DBQuery) -> str:
         from .query import DBJoinKind, DBQueryField
-        from .db import DBTable
+        from .db_table import DBTable
 
         sql = ''
         if query.with_queries:
