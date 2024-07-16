@@ -37,7 +37,7 @@ class DBField:
         if not self.column:
             self.column = self.name
         if not self.ux:
-            self.ux = UX(self.name)
+            self.ux = UX(self.name, blank=not self.required)
         else:
             if not self.ux.title:
                 self.ux.title = self.name

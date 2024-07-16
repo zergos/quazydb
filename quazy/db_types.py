@@ -14,7 +14,7 @@ from .db_field import DBField, UX
 
 __all__ = ['Optional', 'datetime', 'timedelta', 'date', 'time', 'Decimal', 'UUID', 'Many', 'DefaultValue', 'KNOWN_TYPES',
            'db_type_name', 'db_type_by_name', 'FieldCID', 'FieldBody', 'Property', 'ManyToMany', 'IntEnum', 'StrEnum',
-           'Enum']
+           'Enum', 'Text']
 
 
 class DefaultValue:

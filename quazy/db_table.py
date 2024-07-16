@@ -121,8 +121,9 @@ class MetaTable(type):
 
         if not has_pk:
             pk = DBField(pk=True)
-            pk.prepare('id')
             pk.type = int
+            pk.required = False
+            pk.prepare('id')
             fields['id'] = pk
             DB.pk = pk
 
@@ -151,7 +152,6 @@ class MetaTable(type):
     def __getitem__(cls, item: type[DBTable]):
         if not cls.DB.db:
             raise QuazyWrongOperation("Table is not assigned to a database")
-
         return cls.DB.db.get(cls, item)
 
 
@@ -254,10 +254,11 @@ class DBTable(metaclass=MetaTable):
                     continue
                 if issubclass(v, UX):
                     for kk, vv in v.__dict__.items():
-                        if not k.startswith('_'):
+                        if not kk.startswith('_'):
                             setattr(field.ux, kk, vv)
                 else:
                     setattr(field, k, v)
+            return
 
         elif hasattr(t, '__origin__'):  # Union cannot be used with isinstance()
             if t.__origin__ is typing.Union and len(t.__args__) == 2 and t.__args__[1] is type(None):
@@ -419,10 +420,27 @@ class DBTable(metaclass=MetaTable):
         return super().__setattr__(key, value)
 
     @classmethod
-    def get(cls, item):
+    def check_db(cls):
         if not cls.DB.db:
             raise QuazyWrongOperation("Table is not assigned to a database")
+
+    @classmethod
+    def get(cls, item):
+        cls.check_db()
         return cls.DB.db.get(cls, item)
+
+    def save(self):
+        self.check_db()
+        return self.DB.db.save(self)
+
+    def delete(self):
+        self.check_db()
+        self.DB.db.delete(item=self)
+
+    @classmethod
+    def select(cls):
+        cls.check_db()
+        return cls.DB.db.query(cls)
 
     @classmethod
     def _dump_schema(cls) -> dict[str, Any]:
