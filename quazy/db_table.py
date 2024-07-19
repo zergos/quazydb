@@ -395,7 +395,7 @@ class DBTable(metaclass=MetaTable):
             if self._db_:
                 if field := self.DB.fields.get(k):
                     if issubclass(field.type, Enum):
-                        setattr(self, k, field.type(v))
+                        setattr(self, k, field.type(v) if v is not None else None)
                         continue
                     elif field.ref:
                         view = initial.get(f'{k}__view', None)

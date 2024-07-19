@@ -144,6 +144,9 @@ class DBSQL:
     def op(self, op: str, other: Any) -> DBSQL:
         return self.sql(f'{self.sql_text}{op}{self.query.arg(other)!r}')
 
+    def op_rev(self, op: str, other: Any) -> DBSQL:
+        return self.sql(f'{self.query.arg(other)!r}{op}{self.sql_text}')
+
     def func2(self, op: str, other: Any) -> DBSQL:
         return self.sql(f'{op}({self.sql_text}, {self.query.arg(other)!r})')
 
@@ -280,6 +283,9 @@ class DBSQL:
 
     def __contains__(self, item) -> DBSQL:
         return self.op(' in ', item)
+
+    def contains(self, item) -> DBSQL:
+        return self.op_rev(' in ', item)
 
     def __repr__(self):
         return self.sql_text

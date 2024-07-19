@@ -77,7 +77,7 @@ class FieldBody:
 class Property(typing.Generic[T]):
     pass
 
-class Text(DBField):
+class Text(DBField, str):
     type = str
     class UX(UX):
         multiline = True
