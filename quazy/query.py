@@ -77,7 +77,7 @@ class DBQueryField:
         return DBSQL(self._query, self._path) != other
 
     def __contains__(self, item) -> DBSQL:
-        return typing.cast(DBSQL, DBSQL(self._query, self._path) in item)
+        return typing.cast(DBSQL, item in DBSQL(self._query, self._path))
 
     @property
     def pk(self):
@@ -272,8 +272,8 @@ class DBSQL:
     def __float__(self) -> DBSQL:
         return self.cast('double precision')
 
-    def __bool__(self) -> DBSQL:
-        return self.cast('bool')
+    #def __bool__(self) -> DBSQL:
+    #    return self.cast('bool')
 
     def __round__(self, n=None) -> DBSQL:
         return self.func2('round', n)
@@ -282,10 +282,10 @@ class DBSQL:
         return self.func1('trunc')
 
     def __contains__(self, item) -> DBSQL:
-        return self.op(' in ', item)
+        return self.contains(item)
 
     def contains(self, item) -> DBSQL:
-        return self.op_rev(' in ', item)
+        return self.sql('{} LIKE {!r}'.format(self.sql_text, self.query.arg(f'%{item}%')))
 
     def __repr__(self):
         return self.sql_text
@@ -367,22 +367,25 @@ class DBQuery(typing.Generic[T]):
         self.has_aggregates: bool = False
         self.window = (None, None)
         self.with_queries: list[DBWithClause] = []
-        self.args: OrderedDict[str, Any] = OrderedDict()
+        self.args: dict[str, Any] = {}
         self._arg_counter = 0
         self._hash: Optional[Hashable] = None
+        self._collect_scheme()
 
+    def _collect_scheme(self, for_copy: bool = False):
         self.scheme: Union[SimpleNamespace, DBQueryField] = DBScheme()
         for table in self.db._tables:
             setattr(self.scheme, table.DB.snake_name, DBQueryField(self, table))
 
-        if table_class is not None:
-            self.joins[table_class.DB.snake_name] = DBJoin(table_class, DBJoinKind.SOURCE)
-            table_space = DBQueryField(self, table_class)
+        if self.table_class is not None:
+            if not for_copy:
+                self.joins[self.table_class.DB.snake_name] = DBJoin(self.table_class, DBJoinKind.SOURCE)
+            table_space = DBQueryField(self, self.table_class)
             setattr(table_space, '_db', self.scheme)
             self.scheme = table_space
 
-            if table_class.DB.extendable:
-                self.filters.append(getattr(table_space, table_class.DB.cid.name) == self.arg(table_class.DB.discriminator))
+            if not for_copy and self.table_class.DB.extendable:
+                self.filters.append(getattr(table_space, self.table_class.DB.cid.name) == self.arg(self.table_class.DB.discriminator))
 
     def __copy__(self):
         obj = object.__new__(DBQuery)
@@ -394,6 +397,7 @@ class DBQuery(typing.Generic[T]):
                 setattr(obj, k, v)
             else:
                 setattr(obj, k, v.copy())
+        obj._collect_scheme(True)
         return obj
 
     def copy(self):
@@ -424,14 +428,15 @@ class DBQuery(typing.Generic[T]):
     def arg(self, value: Any, aggregated: bool = False) -> DBSQL:
         if isinstance(value, DBSQL):
             return value
-        if isinstance(value, str):
-            return DBSQL(self, f"'{value}'")
+        #if isinstance(value, str):
+        #    return DBSQL(self, f"'{value}'")
         if value is None:
             return DBSQL(self, 'NULL')
         if isinstance(value, DBTable):
             value = value.pk
         if value in self.args.values():
-            key = list(self.args.keys())[list(self.args.values()).index(value)]
+            key = next(k for k, v in self.args.items() if v == value)
+            #key = list(self.args.keys())[list(self.args.values()).index(value)]
             return DBSQL(self, f'%({key})s', aggregated)
         self._arg_counter += 1
         key = f'_arg_{self._arg_counter}'
@@ -582,6 +587,12 @@ class DBQuery(typing.Generic[T]):
         self.filters.clear()
         self.filters.append(self.scheme.pk == pk_id)  # type: ignore
         return self.fetchone()
+
+    def any(self, expr_list: typing.Iterable[DBSQL]) -> DBSQL:
+        result = next(expr_list, None)
+        while (expr:=next(expr_list, None)) is not None:
+            result = result | expr
+        return result
 
     def __getitem__(self, item: Any) -> T | None:
         return self.get(item)
