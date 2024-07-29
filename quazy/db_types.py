@@ -26,7 +26,7 @@ KNOWN_TYPES = (
     datetime, timedelta, date, time,
     Decimal,
     UUID,
-    dict
+    dict,
 )
 
 TYPE_MAP = {
@@ -85,8 +85,11 @@ class Text(DBField, str):
 def db_type_name(t: type) -> str:
     if t in KNOWN_TYPES:
         return t.__name__
-    elif inspect.isclass(t) and issubclass(t, Enum):
-        return 'Enum '+t.__name__
+    elif inspect.isclass(t):
+        if issubclass(t, IntEnum):
+            return 'int'
+        if issubclass(t, StrEnum):
+            return 'str'
     else:
         raise TypeError(f"Unsupported field type {t}")
 
@@ -94,6 +97,4 @@ def db_type_name(t: type) -> str:
 def db_type_by_name(name: str) -> type | str:
     if name in TYPE_MAP:
         return TYPE_MAP[name]
-    elif name.startswith('Enum'):
-        return TYPE_MAP[name.split()[1]]
     return name

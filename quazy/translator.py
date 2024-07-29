@@ -129,7 +129,7 @@ class Translator:
     @classmethod
     def table_name2(cls, schema: str, table_name: str) -> str:
         schema =  schema + '"."' if schema else ''
-        return f'"{schema}{table_name}'
+        return f'"{schema}{table_name}"'
 
     @classmethod
     def subquery_name(cls, subquery: DBQuery) -> str:
@@ -193,7 +193,7 @@ class Translator:
 
     @classmethod
     def rename_table(cls, schema: str, old_table_name: str, new_table_name: str) -> str:
-        res = f"ALTER TABLE {cls.table_name2(schema, old_table_name)} RENAME TO {cls.table_name2(schema, new_table_name)}"
+        res = f"ALTER TABLE {cls.table_name2(schema, old_table_name)} RENAME TO \"{new_table_name}\""
         return res
 
     @classmethod

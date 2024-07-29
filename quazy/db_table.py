@@ -122,8 +122,8 @@ class MetaTable(type):
         if not has_pk:
             pk = DBField(pk=True)
             pk.type = int
-            pk.required = False
             pk.prepare('id')
+            pk.ux.blank = True
             fields['id'] = pk
             DB.pk = pk
 
@@ -212,9 +212,10 @@ class DBTable(metaclass=MetaTable):
 
     @classmethod
     def resolve_types(cls, globalns):
+        from .db_factory import DBFactory
 
         # eval annotations
-        for name, t in typing.get_type_hints(cls, globalns, globals()).items():
+        for name, t in typing.get_type_hints(cls, globals() | globalns, locals()).items():
             if name not in cls.DB.fields:  # or cls.fields[name].type is not None:
                 continue
             field: DBField = cls.DB.fields[name]

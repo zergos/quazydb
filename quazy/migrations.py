@@ -7,7 +7,7 @@ from enum import auto
 from typing import NamedTuple, Any
 
 from . import DBFactory, DBTable, DBField
-from .db_types import StrEnum
+from .db_types import StrEnum, Enum, db_type_by_name
 from .exceptions import *
 
 __all__ = ["check_migrations", "activate_migrations", "get_migrations", "get_changes", "apply_changes", "clear_migrations"]
@@ -200,7 +200,7 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
     tables_to_rename = []
     for pair in rename_list:
         if pair[0] in tables_to_delete and pair[1] in tables_to_add:
-            tables_to_rename.append((tables_to_delete[pair[0]].DB.schema, pair[0], pair[1]))
+            tables_to_rename.append((tables_to_delete[pair[0]].DB.schema, tables_to_delete[pair[0]].DB.table, tables_to_add[pair[1]].DB.table))
             del tables_to_delete[pair[0]]
             del tables_to_add[pair[1]]
 
@@ -250,6 +250,8 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
 
         for f_name, field_old in fields_old.items():
             field_new = fields_new[f_name]
+            if inspect.isclass(field_new.type) and issubclass(field_new.type, Enum):
+                field_new.type = db_type_by_name(field_new.type.__base__.__name__)
 
             # 4.4.1. Check flag changed
             for flag_name in ('pk','cid','prop','required','indexed','unique','default_sql'):

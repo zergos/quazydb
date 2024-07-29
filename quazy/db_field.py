@@ -49,7 +49,7 @@ class DBField:
         res = {
             'name': self.name,
             'column': self.column,
-            'type': db_type_name(self.type) if not self.ref else self.type.__name__,
+            'type': db_type_name(self.type) if not self.ref else self.type.__qualname__,
         }
 
         for col in 'pk cid ref body prop required indexed unique'.split():
