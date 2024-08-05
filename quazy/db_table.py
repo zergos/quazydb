@@ -12,7 +12,7 @@ from .exceptions import *
 if typing.TYPE_CHECKING:
     from typing import *
     from .db_factory import DBFactory
-    from .query import DBQueryField, DBSQL
+    from .query import DBQuery, DBQueryField, DBSQL
 
 __all__ = ['DBTable']
 
@@ -439,7 +439,7 @@ class DBTable(metaclass=MetaTable):
         self.DB.db.delete(item=self)
 
     @classmethod
-    def select(cls):
+    def select(cls) -> DBQuery[typing.Self]:
         cls.check_db()
         return cls.DB.db.query(cls)
 

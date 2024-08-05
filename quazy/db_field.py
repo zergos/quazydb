@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import typing
 from dataclasses import dataclass, field as data_field
 

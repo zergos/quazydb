@@ -167,7 +167,7 @@ class Translator:
 
     @classmethod
     def add_field(cls, table: type[DBTable], field: DBField):
-        col = f'"{field.column}" {cls.type_name(field)} {cls.column_options(field)}'
+        col = f'"{field.column}" {cls.type_name(field)} {cls.column_options(field, table)}'
         res = f'ALTER TABLE {cls.table_name(table)} ADD COLUMN {col}'
         return res
 
