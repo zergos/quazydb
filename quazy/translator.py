@@ -114,7 +114,7 @@ class Translator:
         if field.required and not table.DB.extendable:
             res.append('NOT NULL')
         if field.default_sql:
-            res.append(f'DEFAULT {field.default_sql!r}')
+            res.append(f'DEFAULT {field.default_sql}')
         if field.pk:
             res.append('PRIMARY KEY')
             if field.type is UUID:

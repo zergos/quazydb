@@ -412,7 +412,7 @@ class DBTable(metaclass=MetaTable):
             self.pk = None
         for field_name in self.DB.subtables:
             setattr(self, field_name, list())
-        self._modified_fields_ = set()
+        self._modified_fields_ = set(initial.keys())
 
     def __setattr__(self, key, value):
         if key in self.DB.fields:

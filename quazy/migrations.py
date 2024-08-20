@@ -54,7 +54,7 @@ def get_migrations(db: DBFactory, schema: str) -> list[tuple[bool, int, datetime
 
     res = []
     for row in db.query(Migration).filter(schema=schema).select("index", "created_at", "comments"):
-        res.append((row.index == current_index, row.index, row.created, row.comments))
+        res.append((row.index == current_index, row.index, row.created_at, row.comments))
 
     return res
 
