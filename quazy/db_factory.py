@@ -25,7 +25,7 @@ import typing
 if typing.TYPE_CHECKING:
     from typing import *
     from types import SimpleNamespace
-    from .query import DBQuery, DBSQL
+    from .db_query import DBQuery, DBSQL
 
 __all__ = ['DBFactory']
 
@@ -168,7 +168,7 @@ class DBFactory:
             q = db.query(Street).select('name')
             q = db.query().select(name=lambda s: s.street.name)
         """
-        from .query import DBQuery
+        from .db_query import DBQuery
         return DBQuery[T](self, table_class)
 
     def get(self, table_class: type[T], pk: Any = None, **fields) -> T:
@@ -483,7 +483,7 @@ class DBFactory:
         Yields:
             instance of DBTable/SimpleNamespace or dict
         """
-        from quazy.query import DBQuery
+        from quazy.db_query import DBQuery
         with self.connection() as conn:
             if isinstance(query, DBQuery):
                 sql = self._trans.select(query)
@@ -511,7 +511,7 @@ class DBFactory:
         Returns:
             list of `DBField` instances
         """
-        from quazy.query import DBQuery
+        from quazy.db_query import DBQuery
         from psycopg.rows import no_result
         if typing.TYPE_CHECKING:
             from psycopg.cursor import BaseCursor, RowMaker

@@ -13,7 +13,7 @@ from .exceptions import *
 if typing.TYPE_CHECKING:
     from typing import *
     from .db_factory import DBFactory
-    from .query import DBQuery, DBQueryField, DBSQL
+    from .db_query import DBQuery, DBQueryField, DBSQL
 
 __all__ = ['DBTable']
 

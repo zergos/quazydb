@@ -10,7 +10,7 @@ import typing
 if typing.TYPE_CHECKING:
     from typing import *
     from . import DBTable, DBField
-    from .query import DBQuery, DBSQL, DBJoinKind, DBWithClause, DBQueryField, DBSubqueryField
+    from .db_query import DBQuery, DBSQL, DBJoinKind, DBWithClause, DBQueryField, DBSubqueryField
 
 
 class Translator:
@@ -339,7 +339,7 @@ class Translator:
 
     @classmethod
     def sql_value(cls, value: Union[DBSQL, DBQueryField, str]) -> str:
-        from .query import DBSQL, DBQueryField
+        from .db_query import DBSQL, DBQueryField
         if isinstance(value, DBSQL):
             return repr(value)
         elif isinstance(value, DBQueryField):
@@ -360,7 +360,7 @@ class Translator:
 
     @classmethod
     def select(cls, query: DBQuery) -> str:
-        from .query import DBJoinKind, DBQueryField
+        from .db_query import DBJoinKind, DBQueryField
         from .db_table import DBTable
 
         sql = ''

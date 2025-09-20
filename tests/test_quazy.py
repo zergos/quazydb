@@ -7,7 +7,7 @@ from random import randint
 from datetime import datetime, timedelta
 
 from quazy import DBFactory, DBTable, DBField
-from quazy.query import DBQuery, DBQueryField
+from quazy.db_query import DBQuery, DBQueryField
 from quazy.stub import gen_stub
 from quazy.db_types import FieldCID, FieldBody, Property, Many, ManyToMany
 
