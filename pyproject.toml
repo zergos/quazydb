@@ -11,7 +11,7 @@ authors = [
 maintainers = [
     {name = "Andrey Aseev", email = "invent@zergos.ru"}
 ]
-urls = {Homepage = "https://github.com/zergos/pantra"}
+urls = {Homepage = "https://github.com/zergos/quazydb"}
 description = "Powerful yet simple Python ORM"
 dependencies = [
     'psycopg>=3.0.1',
@@ -19,8 +19,9 @@ dependencies = [
     'psycopg-pool>=3.0',
     'PyYAML>=6.0.1',
     'jsonpickle>=2.0.0',
+    'typing_extensions>=4.15.0',
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dynamic = ["version", "readme"]
 
 [tool.setuptools]
