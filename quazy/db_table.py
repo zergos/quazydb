@@ -4,6 +4,7 @@ import types
 import re
 import sys
 import inspect
+from typing_extensions import deprecated
 
 from .db_field import DBField, UX, DBManyField, DBManyToManyField
 from .db_types import *
@@ -59,7 +60,7 @@ class MetaTable(type):
             field_name = camel2snake(chunks[-1]) + 's'
             DB.snake_name = field_name
             if field_name in DB.fields:
-                raise QuazySubclassError(f'Subclass name {qualname} repeats field name')
+                raise QuazyFieldNameError(f'Subclass name {qualname} repeats (explicit or implicit) field name')
         else:
             DB.snake_name = camel2snake(qualname) + 's'
 
@@ -140,7 +141,7 @@ class MetaTable(type):
 
                 if base.DB.extendable:
                     if DB.extendable:
-                        raise QuazySubclassError('Multiple inheritance of extendable tables is not supported')
+                        raise QuazyNotSupported('Multiple inheritance of extendable tables is not supported')
                     DB.extendable = True
                     DB.is_root = False
                     DB.cid = base.DB.cid
@@ -156,6 +157,25 @@ class MetaTable(type):
 
 
 class DBTable(metaclass=MetaTable):
+    """Table model constructor
+
+    All class attributes are considered as database table fields.
+    Types could be set with annotations or/and directly as `DBField` instance.
+    There are several special class attributes used to set DBTable details and behaviour.
+
+    Attributes:
+        _table_:           database table internal name
+        _title_:           user-friendly table name
+        _schema_:          explicit schema name
+        _just_for_typing_: internal flag used for migrations
+        _extendable_:      set `extendable` flag for a table
+        _discriminator_:   SQL safe CID value to specify table in extended mode
+        _meta_:            mark the table as pure abstract, just for inheritance with common field set
+        _lookup_field_:    specify field name for text search. For integrations only.
+
+    Note:
+        special field name `pk` is reserved as property for direct primary key access
+    """
     # initial attributes
     _table_: typing.ClassVar[str]
     _title_: typing.ClassVar[str]
@@ -171,27 +191,50 @@ class DBTable(metaclass=MetaTable):
     _modified_fields_: set[str]
 
     class DB:
-        db: typing.ClassVar[DBFactory] | None = None  # Database owner, if specified
-        table: typing.ClassVar[str] = None  # Database table name *
-        title: typing.ClassVar[str] = None  # Table title for UI
-        schema: typing.ClassVar[str] = None  # Database schema name *
-        just_for_typing: typing.ClassVar[
-            bool] = False  # Mark table as virtual (defined inline for foreign schema imports)
-        snake_name: typing.ClassVar[str]  # "snake" style table name in plural
-        extendable: typing.ClassVar[bool] = False  # support for extendable classes
-        cid: typing.ClassVar[DBField] = None  # CID field (if declared)
-        is_root: typing.ClassVar[bool] = False  # is root of extendable tree
-        discriminator: typing.ClassVar[typing.Any]  # inherited table inner code
-        owner: typing.ClassVar[typing.Union[str, type[DBTable]]] = None  # table owner of sub table
-        subtables: typing.ClassVar[dict[str, type[DBTable]]] = None  # sub tables list
-        meta: typing.ClassVar[bool] = False  # mark table as meta table (abstract) *
-        pk: typing.ClassVar[DBField] = None  # reference to primary field
-        body: typing.ClassVar[DBField] = None  # reference to body field of None
+        """DBTable meta subclass with internal information
+
+        It has only class based attributes, intended for read only. Instances isn't supported.
+
+        Attributes:
+            db:                     `DBFactory` linked to a table, if already specified
+            table:                  database table internal name
+            title:                  user-friendly table name
+            schema:                 explicit schema name
+            just_for_typing:        internal flag used for migrations
+            snake_name:             "snake" style table name in plural
+            extendable:             support for extendable classes
+            cid:                    CID field reference (if declared)
+            is_root:                is table a root of extendable tables chain
+            discriminator:          inherited table inner code
+            owner:                  table owner of subtable
+            subtables:              subtables list
+            meta:                   table marked as meta table (pure abstract)
+            pk:                     reference to primary field
+            body:                   reference to body field of None
+            many_fields:            dict of field sets, when this table is referred from another table
+            many_to_many_fields:    dict of field sets, when two tables referred to each other
+            fields:                 all fields dict
+            lookup_field:           field name for text search for integrations
+        """
+        db: typing.ClassVar[DBFactory] | None = None
+        table: typing.ClassVar[str] = None
+        title: typing.ClassVar[str] = None
+        schema: typing.ClassVar[str] = None
+        just_for_typing: typing.ClassVar[bool] = False
+        snake_name: typing.ClassVar[str]
+        extendable: typing.ClassVar[bool] = False
+        cid: typing.ClassVar[DBField] = None
+        is_root: typing.ClassVar[bool] = False
+        discriminator: typing.ClassVar[typing.Any]
+        owner: typing.ClassVar[typing.Union[str, type[DBTable]]] = None
+        subtables: typing.ClassVar[dict[str, type[DBTable]]] = None
+        meta: typing.ClassVar[bool] = False
+        pk: typing.ClassVar[DBField] = None
+        body: typing.ClassVar[DBField] = None
         many_fields: typing.ClassVar[dict[str, DBManyField]] = None
         many_to_many_fields: typing.ClassVar[dict[str, DBManyToManyField]] = None
-        fields: typing.ClassVar[dict[str, DBField]] = None  # list of all fields
-        lookup_field: typing.ClassVar[str] = None  # field name for text search
-        # * marked attributes are able to modify by descendants
+        fields: typing.ClassVar[dict[str, DBField]] = None
+        lookup_field: typing.ClassVar[str] = None
 
     class ItemGetter:
         def __init__(self, db: DBFactory, table: type[DBTable], pk_id: Any, view: str = None):
@@ -212,6 +255,9 @@ class DBTable(metaclass=MetaTable):
 
     @classmethod
     def resolve_types(cls, globalns):
+        """Resolve fields types from annotations
+
+        :meta private:"""
         from .db_factory import DBFactory
 
         # eval annotations
@@ -244,6 +290,9 @@ class DBTable(metaclass=MetaTable):
 
     @classmethod
     def resolve_type(cls, t: Union[type, typing._GenericAlias], field: DBField, globalns) -> bool | None:
+        """Resolve field types from annotations
+
+        :meta private:"""
         if t in KNOWN_TYPES or inspect.isclass(t) and issubclass(t, Enum):
             # Base type
             field.type = t
@@ -322,6 +371,9 @@ class DBTable(metaclass=MetaTable):
 
     @classmethod
     def resolve_types_many(cls, add_middle_table: Callable[[type[DBTable]], Any]):
+        """Resolve referred types from annotations
+
+        :meta private:"""
         # eval refs
         for name, field in cls.DB.fields.items():
             if field.ref:
@@ -382,6 +434,11 @@ class DBTable(metaclass=MetaTable):
             field.source_table.DB.many_to_many_fields[rev_name].source_field = f1.column
 
     def __init__(self, **initial):
+        """DBTable instance constructor
+
+        Args:
+            **initial: fields initial values
+        """
         self._modified_fields_: set[str] | None = None
         self._db_: DBFactory = initial.pop('_db_', self.DB.db)
         # self.id: Union[None, int, UUID] = None
@@ -422,26 +479,45 @@ class DBTable(metaclass=MetaTable):
 
     @classmethod
     def check_db(cls):
+        """Check whether DBTable is assigned to DBFactory
+
+        Raises:
+            QuazyWrongOperation: table is not assigned
+
+        :meta private:"""
         if not cls.DB.db:
             raise QuazyWrongOperation("Table is not assigned to a database")
 
     @classmethod
     def get(cls, item):
+        """Get DBTable instance by primary key value
+
+        Args:
+            item: primary key value
+        """
         cls.check_db()
         return cls.DB.db.get(cls, item)
 
     def save(self):
+        """Save DBTable instance changes to a database"""
         self.check_db()
         return self.DB.db.save(self)
 
     def delete(self):
+        """Delete DBTable instance from a database"""
         self.check_db()
         self.DB.db.delete(item=self)
 
     @classmethod
-    def select(cls) -> DBQuery[typing.Self]:
+    def query(cls) -> DBQuery[typing.Self]:
+        """Create DBQuery instance for queries, associated with this table"""
         cls.check_db()
         return cls.DB.db.query(cls)
+
+    @classmethod
+    @deprecated("Use method `query` instead")
+    def select(cls) -> DBQuery[typing.Self]:
+        return cls.query()
 
     @classmethod
     def _dump_schema(cls) -> dict[str, Any]:
@@ -481,13 +557,19 @@ class DBTable(metaclass=MetaTable):
 
     @property
     def pk(self):
+        """get primary key value"""
         return getattr(self, self.DB.pk.name)
 
     @pk.setter
     def pk(self, value):
+        """set primary key value"""
         setattr(self, self.DB.pk.name, value)
 
-    def inspect(self):
+    def inspect(self) -> str:
+        """Inspect table in simple text format
+
+        key: value (type)
+        """
         res = []
         for k, v in vars(self).items():
             if not k.startswith('_'):
@@ -495,11 +577,28 @@ class DBTable(metaclass=MetaTable):
         return '\n'.join(res)
 
     @classmethod
-    def _view(cls, item: DBQueryField):
+    def _view(cls, item: DBQueryField[typing.Self]) -> DBQuery[typing.Self] | None:
+        """virtual method to override DBTable item presentation
+
+        Originally, each table item is presented as primary key value (integer number for ex.). It is more
+        convenient to see user-friendly presentation, like `name`, `caption` or several field combined.
+
+        Example:
+            .. code-block:: python
+
+                class User(DBTable):
+                    name: str
+
+                    def _view(self, item: DBQueryField):
+                        return item.name
+
+        :meta public:
+        """
         return None
 
     @classmethod
     def get_lookup_field(cls, item: DBQueryField) -> DBSQL | None:
+        """return lookup field"""
         if cls.DB.lookup_field:
             return item[cls.DB.lookup_field]
 
@@ -510,19 +609,19 @@ class DBTable(metaclass=MetaTable):
         return self.pk != other.pk if isinstance(other, DBTable) else other
 
     def _before_update(self, db: DBFactory):
-        ...
+        """abstract event before update to database"""
 
     def _after_update(self, db: DBFactory):
-        ...
+        """abstract event after update to database"""
 
     def _before_insert(self, db: DBFactory):
-        ...
+        """abstract event before insert to database"""
 
     def _after_insert(self, db: DBFactory):
-        ...
+        """abstract event after insert to database"""
 
     def _before_delete(self, db: DBFactory):
-        ...
+        """abstract event before delete from database"""
 
     def _after_delete(self, db: DBFactory):
-        ...
+        """abstract event after delete from database"""

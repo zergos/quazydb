@@ -1,3 +1,8 @@
+"""Database factory.
+
+This module represents one class `DBFactory` as a start point to any connection with database.
+"""
+
 from __future__ import annotations
 
 import sys
@@ -29,15 +34,59 @@ T = typing.TypeVar('T', bound='DBTable')
 
 
 class DBFactory:
+    """Basic database factory class
+
+    Use this class to arrange connection to a database, parse table models and run queries.
+
+    Note:
+        It supports Postgres database only at the moment
+
+    Example:
+        .. code-block::
+
+            db = DBFactory.postgres(conninfo="postgresql://quazy:quazy@localhost/quazy")
+            db._debug_mode = True
+            db.use_module()
+            db.clear()
+            db.create()
+            ...
+
+    """
     _trans = Translator
 
     def __init__(self, connection_pool, debug_mode: bool = False):
+        """Basic constructor for database connection
+
+        Create connection via specific pool.
+
+        Note:
+            Normally is not intended to run manually, as it intended to use of proxy constructors
+            like `postgres()` below
+
+        Note:
+            It is highly appreciated to work with databases supported pools.
+
+        Args:
+             connection_pool: Connection pool to work with database
+             debug_mode: Debug mode - writes all queries to logs before execution
+        """
         self._connection_pool: psycopg_pool.ConnectionPool = connection_pool
         self._tables: list[type[DBTable]] = list()
         self._debug_mode = debug_mode
 
     @staticmethod
     def postgres(**kwargs) -> DBFactory | None:
+        """Proxy constructor Postgres specific
+
+        Args:
+            **kwargs: all keywords arguments passed to `psycopg` constructor, except `debug_mode`
+
+        Returns:
+            DBFactory instance or None
+
+        Example:
+            db = DBFactory.postgres(conninfo="postgresql://quazy:quazy@localhost/quazy")
+        """
         debug_mode = kwargs.pop("debug_mode", False)
         conninfo = kwargs.pop("conninfo")
         try:
@@ -49,6 +98,12 @@ class DBFactory:
         return DBFactory(pool, debug_mode)
 
     def use(self, cls: type[DBTable], schema: str = 'public'):
+        """Use a specific table with factory instance
+
+        Args:
+            cls: Table to use
+            schema: schema name to use
+        """
         cls.DB.db = self
         if not cls.DB.schema:
             cls.DB.schema = schema
@@ -58,6 +113,12 @@ class DBFactory:
         return cls
 
     def use_module(self, name: str = None, schema: str = 'public'):
+        """Use a specific module by name with factory instance
+
+        Args:
+            name: module name to use. If not specified, uses current module
+            schema: schema name to use
+        """
         if name:
             if name in sys.modules:
                 globalns = vars(sys.modules[name])
@@ -79,22 +140,51 @@ class DBFactory:
             table.resolve_types_many(lambda t: self.use(t, schema))
 
     def __contains__(self, item: str | DBTable) -> bool:
+        """Check if DBTable exists in database factory"""
         if isinstance(item, str):
             return any(item == table.__qualname__ for table in self._tables)
         else:
             return item in self._tables
         
     def __getitem__(self, item: str) -> type[DBTable]:
+        """Get DBTable class by name"""
         for table in self._tables:
             if table.__qualname__ == item:
                 return table
         raise KeyError(item)
 
     def query(self, table_class: Optional[type[T]] = None) -> DBQuery[T]:
+        """Create DBQuery instance
+
+        Create DBQuery instance bound to a specified DBTable or to the whole schema
+
+        Args:
+            table_class: DBTable class to use or None
+
+        Returns:
+            DBQuery instance
+
+        Example:
+            q = db.query(Street).select('name')
+            q = db.query().select(name=lambda s: s.street.name)
+        """
         from .query import DBQuery
         return DBQuery[T](self, table_class)
 
     def get(self, table_class: type[T], pk: Any = None, **fields) -> T:
+        """Request one row from database table
+
+        Hint:
+            This method is not intended to be used directly. It is shorter to call `get` method from `DBTable` instance.
+
+        Args:
+            table_class: DBTable class to use
+            pk: primary key value to filter row (optional)
+            **fields: field names and values to filter row if no pk specified (optional)
+
+        Returns:
+            DBTable instance
+        """
         query = self.query(table_class)
         if pk is not None:
             query.filter(pk=pk)
@@ -103,13 +193,16 @@ class DBFactory:
         return query.fetchone()
 
     def get_connection(self) -> psycopg.Connection:
+        """Get database connection from then pool for low level operations"""
         return self._connection_pool.getconn()
 
     def release_connection(self, conn: psycopg.Connection):
+        """Release given connection to the pool"""
         self._connection_pool.putconn(conn)
 
     @contextmanager
     def connection(self, reuse_conn: psycopg.Connection = None) -> psycopg.Connection:
+        """Context manager for connection"""
         if reuse_conn is not None:
             yield reuse_conn
         else:
@@ -117,6 +210,14 @@ class DBFactory:
                 yield conn
 
     def clear(self, schema: str = None):
+        """Drop all known tables in database
+
+        Args:
+            schema: schema name to use
+
+        Warning:
+            It works without attention. Please, double check before calling.
+        """
         with self.connection() as conn:  # type: psycopg.Connection
             tables = []
             for res in conn.execute(self._trans.select_all_tables()):
@@ -127,6 +228,15 @@ class DBFactory:
                     conn.execute(f'DROP TABLE {table} CASCADE')
 
     def all_tables(self, schema: str = None, for_stub: bool = False) -> list[type[DBTable]]:
+        """Get all known tables in database
+
+        Args:
+            schema: schema name to use
+            for_stub: whether to return tables only for stub purposes (uses internally)
+
+        Returns:
+            List of table classes
+        """
 
         all_tables = self._tables.copy()
         for table in self._tables:
@@ -193,6 +303,10 @@ class DBFactory:
         return all_tables
 
     def missed_tables(self, schema: str = None) -> list[type[DBTable]]:
+        """Get all tables added as models, but not created in database yet
+
+        :meta private:
+        """
         all_tables = self.all_tables(schema)
 
         with self.select(self._trans.select_all_tables()) as created_tables_query:
@@ -206,13 +320,21 @@ class DBFactory:
         return all_tables
 
     def check(self, schema: str = None) -> bool:
+        """Check all tables are created in database
+
+        :meta private:
+        """
         return len(self.missed_tables(schema)) == 0
 
     def table_exists(self, table: DBTable) -> bool:
+        """Check if table exists in database
+
+        :meta private:"""
         with self.select(self._trans.is_table_exists(table)) as res:
             return res.fetchone()[0]
 
     def create(self, schema: str = None):
+        """Create all added tables in database"""
         all_tables = self.missed_tables(schema)
         if not all_tables:
             return
@@ -238,6 +360,18 @@ class DBFactory:
                             conn.execute(self._trans.add_reference(table, field))
 
     def insert(self, item: T) -> T:
+        """Insert item into database
+
+        Args:
+            item: instance of DBTable to insert
+
+        Returns:
+            updated item, just for chain calls
+
+        Note:
+            Inserted item could contain subtables of subclasses and many-to-many sets.
+            In this case they will be bulk inserted.
+        """
         item._before_insert(self)
         fields: list[tuple[DBField, Any]] = []
         for name, field in item.DB.fields.items():
@@ -301,6 +435,17 @@ class DBFactory:
         return item
 
     def update(self, item: T) -> T:
+        """Update item changes to a database
+
+        Args:
+            item: instance of DBTable to insert
+
+        Returns:
+            updated item, just for chain calls
+
+        Note:
+            If item instance has subtables of subclasses, they will be bulk updated (delete + insert).
+        """
         item._before_update(self)
         fields: list[tuple[DBField, Any]] = []
         for name in item._modified_fields_:
@@ -322,7 +467,22 @@ class DBFactory:
         return item
 
     @contextmanager
-    def select(self, query: Union[DBQuery, str], as_dict: bool = False) -> Iterator[DBTable | SimpleNamespace]:
+    def select(self, query: Union[DBQuery, str], as_dict: bool = False) -> Iterator[DBTable | SimpleNamespace | dict[str, Any]]:
+        """Select items from database
+
+        It performs prepared query to a database and yields results. Is not intended for direct calls.
+        Use preferably `select` method of DBQuery instance.
+        Result type depends on query type:
+        if query is based on specific DBTable, result is instance of DBTable
+        if query is based on whole schema, result is SimpleNamespace
+
+        Args:
+            query: instance of DBQuery or string
+            as_dict: results yields as dict instead of instance of DBTable/SimpleNamespace
+
+        Yields:
+            instance of DBTable/SimpleNamespace or dict
+        """
         from quazy.query import DBQuery
         with self.connection() as conn:
             if isinstance(query, DBQuery):
@@ -341,6 +501,16 @@ class DBFactory:
                     yield curr.execute(query)
 
     def describe(self, query: Union[DBQuery[T], str]) -> list[DBField]:
+        """Describe query result fields information
+
+        It performs prepared query to a database requesting zero rows just to collect information about fields.
+
+        Args:
+            query: instance of DBQuery or string
+
+        Returns:
+            list of `DBField` instances
+        """
         from quazy.query import DBQuery
         from psycopg.rows import no_result
         if typing.TYPE_CHECKING:
@@ -380,6 +550,17 @@ class DBFactory:
 
 
     def save(self, item: T, lookup_field: str | None = None) -> T:
+        """Save item to database
+
+        It checks whether item need to be inserted or updated. Specify `lookup_field` to avoid searching by primary key.
+
+        Args:
+            item: instance of DBTable
+            lookup_field: field name or None
+
+        Returns:
+            updated instance, just for chain calls
+        """
         pk_name = item.__class__.DB.pk.name
         if lookup_field:
             row_id = self.query(item.__class__)\
@@ -406,6 +587,27 @@ class DBFactory:
                query: DBQuery[T] = None,
                filter: Callable[[T], DBSQL] = None,
                reuse_conn: psycopg.Connection = None):
+        """Delete item or items from database
+
+        It has many possible ways to delete expected items:
+         * by item
+         * by table and id (for primary key)
+         * by items list
+         * by query based on DBTable
+         * by table and lamba filter
+
+        Args:
+            table: DBTable class
+            item: instance of DBTable
+            id: instance primary key id
+            items: iterable of DBTable instances
+            query: instance of DBQuery based on DBTable
+            filter: callable lamba added to a query
+            reuse_conn: specify connection if it already created
+
+        Raises:
+            QuazyWrongOperation: wrong arguments usage
+        """
         if id is not None:
             if table is None:
                 raise QuazyWrongOperation("Both `id` and `table` should be specified")

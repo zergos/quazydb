@@ -9,8 +9,9 @@ quazydb documentation
 Powerful yet simple Python ORM
 
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 3
    :caption: Contents:
 
    user_guide
-
+   classes
+   advanced

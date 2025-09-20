@@ -137,10 +137,6 @@ Select fields by names or calculate by `lambdas`:
 
     query = db.query(Item).select("name", "base_unit", unit=lambda x: x.base_unit.name)
 
-    fields = query.describe()
-    for f in fields:
-        print(f'{f.name} - {f.type.__name__}')
-
     print(query.fetchall())
 
 Filter by lambdas:
@@ -170,6 +166,35 @@ Let's use Postgres binary protocol to precompile and reuse queries.
     with db.select(q) as res:
         for row in res:
             print(row)
+
+..  note::
+
+    We use a trick here. According to Python documentation, it is not explicitly said about context variable usage
+    outside `with` context. But, certainly, we can.
+
+Subqueries
+----------
+
+Reuse initial query for additional results for easy
+
+..  code-block::
+
+    with db.query() as q2:
+        sub = q2.with_query(q)
+        q2.select(total_max=q2.max(sub.date_sum))
+    max_sum = q2.fetchone().total_max
+
+Queries result types
+--------------------
+
+Let's collect information about query result fields before actual execution.
+We would really need it to prepare user intefrace in advance.
+
+.. code-block::
+
+    fields = query.describe()
+    for f in fields:
+        print(f'{f.name} - {f.type.__name__}')
 
 
 Migrations

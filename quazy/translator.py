@@ -67,13 +67,13 @@ class Translator:
         raise QuazyTranslatorException(f'Unsupported DB column type {field.name} ({field.type})')
 
     @classmethod
-    def serialize(cls, field: DBField, value: str) -> str:
+    def json_serialize(cls, field: DBField, value: str) -> str:
         #if field.type is str:
         #    return value
         if field.type in (str, int, float, bool, bytes, UUID):
             return f'{value}::text'
         if field.ref:
-            return cls.serialize(field.type.DB.pk, value)
+            return cls.json_serialize(field.type.DB.pk, value)
         if field.type in (datetime, timedelta):
             return f'CAST(extract(epoch from {value}) as integer)'
         if field.type in (date, time):
@@ -81,13 +81,13 @@ class Translator:
         raise QuazyFieldTypeError(f'Type `{field.type.__name__}` is not supported for serialization')
 
     @classmethod
-    def deserialize(cls, field: DBField, field_path: str) -> str:
+    def json_deserialize(cls, field: DBField, field_path: str) -> str:
         if field.type is str:
             return field_path
         if field.type in (int, float, bool, bytes, UUID):
             return f'CAST({field_path} as {cls.type_cast(field)})'
         if field.ref:
-            return cls.deserialize(field.type.DB.pk, field_path)
+            return cls.json_deserialize(field.type.DB.pk, field_path)
         if field.type is datetime:
             return f'to_timestamp(({field_path})::integer)'
         if field.type is date:
@@ -268,14 +268,14 @@ class Translator:
                     if field.default in None:
                         body_values[field.name] = 'null'
                     else:
-                        body_values[field.name] = cls.serialize(field, f'%(v{idx})s')
+                        body_values[field.name] = cls.json_serialize(field, f'%(v{idx})s')
                         if not callable(field.default):
                             values[f'v{idx}'] = field.default
                         else:
                             values[f'v{idx}'] = field.default()
                         idx += 1
                 else:
-                    body_values[field.name] = cls.serialize(field, f'%(v{idx})s')
+                    body_values[field.name] = cls.json_serialize(field, f'%(v{idx})s')
                     values[f'v{idx}'] = cls.get_value(field, value)
                     idx += 1
 
@@ -325,7 +325,7 @@ class Translator:
             if not field[0].prop:
                 sets.append(f'"{field[0].column}" = {sql_value}')
             else:
-                props.append("'{}',{}".format(field[0].column, cls.serialize(field[0], sql_value)))
+                props.append("'{}',{}".format(field[0].column, cls.json_serialize(field[0], sql_value)))
 
         sets_sql = ', '.join(sets)
         if table.DB.body and props:
@@ -388,10 +388,7 @@ class Translator:
         filters = []
         group_filters = []
         for filter in query.filters:
-            if not filter.aggregated:
-                filters.append(cls.sql_value(filter))
-            else:
-                group_filters.append(cls.sql_value(filter))
+            filters.append(cls.sql_value(filter))
         for group_filter in query.group_filters:
             group_filters.append(cls.sql_value(group_filter))
         groups = []

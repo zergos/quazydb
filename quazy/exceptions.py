@@ -1,31 +1,26 @@
 class QuazyError(Exception):
-    pass
+    """Common error base class"""
 
 
 class QuazyFieldTypeError(QuazyError):
-    pass
-
-
-class QuazySubclassError(QuazyError):
-    pass
+    """Field type definition error. For example, type is not supported"""
 
 
 class QuazyFieldNameError(QuazyError):
-    pass
+    """Field name definition error. Probably, naming collision occurs"""
 
 
 class QuazyMissedField(QuazyError):
-    pass
+    """Field name missed in a table while access to a data"""
 
 
 class QuazyTranslatorException(QuazyError):
-    pass
+    """SQL translator has run into something trying to prepare a query"""
 
 
 class QuazyNotSupported(QuazyError):
-    pass
+    """You are trying to perform something not supported by QuazyDB yet"""
 
 
 class QuazyWrongOperation(QuazyError):
-    pass
-
+    """You are trying to use something wrong way"""

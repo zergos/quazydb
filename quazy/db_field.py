@@ -12,22 +12,41 @@ __all__ = ['DBField', 'UX']
 
 @dataclass
 class DBField:
-    name: str = data_field(default='', init=False)         # field name in Python
-    column: str = ''                                       # field/column name in database
-    type: Union[type[DBTable], type[Any]] = data_field(default=None, init=False)  # noqa field type class
-    pk: bool = False                                       # is it primary key?
-    cid: bool = False                                      # is it storage of table name for inherited tables ?
-    ref: bool = data_field(default=False, init=False)      # is it foreign key (reference) ?
-    body: bool = False                                     # is it body field for properties?
-    prop: bool = False                                     # is it property field?
-    required: bool = data_field(default=True, init=False)  # is field not null ?
-    indexed: bool = False                                  # is it indexed for fast search ?
-    unique: bool = False                                   # is it unique ?
-    default: Union[Any, Callable[[], Any]] = None          # default value at Python level
-    default_sql: str = None                                # default value at SQL level
-    reverse_name: str = None                               # reverse name for reference fields
+    """Table field description class
+
+    Attributes:
+        name:         field name in Python
+        column:       field/column name in database
+        type:         field type class
+        pk:           is it primary key?
+        cid:          is it storage of table name for inherited tables ?
+        ref:          is it foreign key (reference) ?
+        body:         is it body field for properties?
+        prop:         is it property field?
+        required:     is field not null ?
+        indexed:      is it indexed for fast search ?
+        unique:       is it unique ?
+        default:      default value at Python level
+        default_sql:  default value at SQL level
+        reverse_name: reverse name for reference fields
+        ux:           UX/UI specific attributes
+    """
+    name: str = data_field(default='', init=False)
+    column: str = ''
+    type: 'type[DBTable] | type' = data_field(default=None, init=False)
+    pk: bool = False
+    cid: bool = False
+    ref: bool = data_field(default=False, init=False)
+    body: bool = False
+    prop: bool = False
+    required: bool = data_field(default=True, init=False)
+    indexed: bool = False
+    unique: bool = False
+    default: Union[Any, Callable[[], Any]] = None
+    default_sql: str = None
+    reverse_name: str = None
     # many_field: bool = data_field(default=False, init=False)
-    ux: Optional[UX] = None                                # UX/UI options
+    ux: Optional[UX] = None
 
     def __post_init__(self):
         if self.default is not None or self.default_sql is not None:
@@ -78,12 +97,29 @@ class DBField:
 
 @dataclass
 class UX:
+    """Base class for visual representation of field, UI specific
+
+    This class contains the most common visual representation properties. It isn't used in Quazy directly, but it
+    helps to integrate with any GUI framework.
+
+    Attributes:
+        field:     reference to original field
+        title:     user level title of a field
+        width:     integer size in GUI specific units (usually, letters amount)
+        choices:   select value by user level title from dropdown list
+        blank:     allow field unfilled
+        readonly:  disable modifications of a field
+        multiline: enable multiline editor for a text field
+        hidden:    hide field from UI
+        sortable:  allows sorting by field values in tables
+        resizable: allows resizing column of field in tables
+    """
     field: DBField = data_field(init=False)
     _name: str = ''
-    _type: type = None
+    _type: 'type' = None
     title: str = ''
     width: int = None
-    choices: Mapping = None
+    choices: Mapping[str, Any] = None
     blank: bool = False
     readonly: bool = False
     multiline: bool = False
@@ -97,10 +133,12 @@ class UX:
 
     @property
     def name(self) -> str:
+        """original field name"""
         return self.field.name if hasattr(self, "field") else self._name
 
     @property
-    def type(self) -> type:
+    def type(self) -> 'type':
+        """original field type"""
         return self.field.type if hasattr(self, "field") else self._type
 
 @dataclass

@@ -23,6 +23,10 @@ class NamedTable(DBTable):
     def __str__(self):
         return f'Named item is {self.name}'
 
+    @classmethod
+    def _view(cls, item: DBQueryField[typing.Self]) -> DBQuery[typing.Self]:
+        return item.name
+
 
 class Client(NamedTable):
     city: 'City' = DBField(reverse_name='clients')

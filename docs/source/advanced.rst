@@ -1,0 +1,6 @@
+Advanced usage
+##############
+
+Extendable tables
+=================
+
