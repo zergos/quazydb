@@ -413,10 +413,11 @@ class DBQuery(typing.Generic[T]):
         self.groups: list[DBSQL] = []
         self.group_filters: list[DBSQL] = []
         self.has_aggregates: bool = False
-        self.window = (None, None)
+        self.window: tuple[int | None, int | None] = (None, None)
+        self.is_distinct: bool = False
         self.with_queries: list[DBWithClause] = []
         self.args: dict[str, Any] = {}
-        self._arg_counter = 0
+        self._arg_counter: int = 0
         self._hash: Optional[Hashable] = None
         self._collect_scheme()
 
@@ -630,6 +631,14 @@ class DBQuery(typing.Generic[T]):
         """
         self.fetch_objects = False
         self.fields['*'] = DBSQL(self, '*')
+        return self
+
+    def distinct(self) -> DBQuery[T]:
+        """Select only different rows for this query.
+
+        Add `DISTINCT` clause to `SELECT ...` statement.
+        """
+        self.is_distinct = True
         return self
 
     def sort_by(self, *fields: FDBSQL, desc: bool = False) -> DBQuery[T]:

@@ -368,6 +368,8 @@ class Translator:
             sql += cls.with_select(query.with_queries)
 
         sql += 'SELECT\n'
+        if query.is_distinct:
+            sql += 'DISTINCT\n'
         fields = []
         for field, value in query.fields.items():
             fields.append(f'{cls.sql_value(value)} AS "{field}"') if field != '*' else fields.append(cls.sql_value(value))
