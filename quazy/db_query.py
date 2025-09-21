@@ -384,7 +384,7 @@ if typing.TYPE_CHECKING:
 class DBQuery(typing.Generic[T]):
     """Query base class
 
-    Create it with DBFactory.query() or DBTable.select().
+    Create it with DBFactory.query() or DBTable.query().
     """
     queries: ClassVar[dict[Hashable, DBQuery]] = {}
 
