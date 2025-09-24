@@ -510,14 +510,15 @@ class DBTable(metaclass=MetaTable):
 
     @classmethod
     def query(cls) -> DBQuery[typing.Self]:
-        """Create DBQuery instance for queries, associated with this table"""
+        """Create DBQuery instance for queries, associated with this table
+
+        Hint:
+            Use identical method name `select` for your preference.
+        """
         cls.check_db()
         return cls.DB.db.query(cls)
 
-    @classmethod
-    @deprecated("Use method `query` instead")
-    def select(cls) -> DBQuery[typing.Self]:
-        return cls.query()
+    select = query
 
     @classmethod
     def _dump_schema(cls) -> dict[str, Any]:

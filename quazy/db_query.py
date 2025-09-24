@@ -164,8 +164,8 @@ class DBSQL:
     def sql(self, sql: str) -> DBSQL:
         return DBSQL(self.query, sql, self.aggregated)
 
-    def arg(self, value: Any) -> DBSQL:
-        return self.query.arg(value, self.aggregated)
+    #def arg(self, value: Any) -> DBSQL:
+    #    return self.query.arg(value, self.aggregated)
     
     def func1(self, op: str) -> DBSQL:
         return self.sql(f'{op}({self.sql_text})')
@@ -660,6 +660,9 @@ class DBQuery(typing.Generic[T]):
 
         Filter can be applied by common lambda expression or by specific field/value pairs.
 
+        Hint:
+            Use identical method name `where` for your preference.
+
         Example:
             .. code-block:: python
 
@@ -684,6 +687,8 @@ class DBQuery(typing.Generic[T]):
         for k, v in kwargs.items():
             self.filters.append(getattr(self.scheme, k) == v)  # noqa
         return self
+
+    where = filter
 
     def exclude(self, _expression: FDBSQL = None, **kwargs) -> DBQuery[T]:
         """Filter elements to exclude from query
