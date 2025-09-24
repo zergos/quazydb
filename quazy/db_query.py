@@ -853,12 +853,13 @@ class DBQuery(typing.Generic[T]):
         self._check_fields()
         return self.db.describe(self)
 
-    def __iter__(self):
+    def __iter__(self) -> Generator[T]:
         """Execute query and iterate all over result rows
 
         :meta public:
         """
-        yield from self.execute()
+        with self.execute() as curr:
+            yield from curr
 
     def fetchone(self, as_dict: bool = False) -> T | Any:
         """Execute query and fetch first result row"""

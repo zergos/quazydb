@@ -608,6 +608,9 @@ class DBTable(metaclass=MetaTable):
     def __ne__(self, other):
         return self.pk != other.pk if isinstance(other, DBTable) else other
 
+    def __str__(self):
+        return f'{self.__class__.__name__}({self.pk})'
+
     def _before_update(self, db: DBFactory):
         """abstract event before update to database"""
 
