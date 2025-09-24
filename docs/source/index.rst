@@ -10,6 +10,7 @@ quazydb documentation
     :scale:  50%
 
 Powerful yet simple Python ORM
+
 GitHub project: https://github.com/zergos/quazydb
 
 .. toctree::
