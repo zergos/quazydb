@@ -1,4 +1,7 @@
 # quazydb
+
+![Logo](/docs/source/images/logo.png)
+
 Powerful yet simple Python ORM
 
 Let's combine all modern ORMs with business essence into something intuitive and simple.

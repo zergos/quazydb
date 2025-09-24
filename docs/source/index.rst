@@ -8,6 +8,10 @@ quazydb documentation
 
 Powerful yet simple Python ORM
 
+.. image:: images/logo.png
+
+GitHub project:
+
 .. toctree::
    :maxdepth: 3
    :caption: Contents:
