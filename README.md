@@ -1,6 +1,6 @@
 # quazydb
 
-![Logo](/docs/source/images/logo.png)
+![Logo](/docs/source/images/logo_mini.png)
 
 Powerful yet simple Python ORM
 

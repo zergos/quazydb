@@ -6,11 +6,11 @@
 quazydb documentation
 =====================
 
-Powerful yet simple Python ORM
-
 .. image:: images/logo.png
+    :scale:  50%
 
-GitHub project:
+Powerful yet simple Python ORM
+GitHub project: https://github.com/zergos/quazydb
 
 .. toctree::
    :maxdepth: 3
