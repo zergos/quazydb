@@ -60,12 +60,19 @@ class DBQueryField(typing.Generic[T]):
                 return DBQueryField(self._query, self._table, field_path, field)
             return DBSQL(self._query, f'{field_path}')
 
-        elif table := DB.subtables.get(item) or DB.many_fields.get(item):
+        elif table := DB.subtables.get(item):
             join_path = f'{self._path}__{item}'
             if join_path not in self._query.joins:
                 self._query.joins[join_path] = DBJoin(table, DBJoinKind.LEFT,
                                                   f'{self._path}.{DB.pk.name} = {join_path}.{DB.table}')
             return DBQueryField(self._query, table, join_path)
+
+        elif  many_field := DB.many_fields.get(item):
+            join_path = f'{self._path}__{item}'
+            if join_path not in self._query.joins:
+                self._query.joins[join_path] = DBJoin(many_field.source_table, DBJoinKind.LEFT,
+                                                  f'{self._table.DB.snake_name}.{DB.pk.name} = {join_path}.{DB.table}')
+            return DBQueryField(self._query, many_field.source_table, join_path)
 
         raise QuazyFieldNameError(f'field `{item}` is not found in `{DB.table}`')
     
