@@ -265,7 +265,8 @@ class DBSQL:
         return self.func1("NOT")
 
     def __lshift__(self, other) -> DBSQL:
-        return self.op('<<', other)
+        # return self.op('<<', other)
+        return self.op(" IN ", other)
 
     def __rlshift__(self, other) -> DBSQL:
         return self.arg(other) << self
@@ -315,8 +316,8 @@ class DBSQL:
     def __trunc__(self) -> DBSQL:
         return self.func1('trunc')
 
-    def __contains__(self, item) -> DBSQL:
-        return self.contains(item)
+    #def __contains__(self, item) -> DBSQL:
+    #    return self.contains(item)
 
     def contains(self, item) -> DBSQL:
         return self.sql('{} LIKE {!r}'.format(self.sql_text, self.query.arg(f'%{item}%')))
@@ -350,6 +351,18 @@ class DBSQL:
             return self.func2('substr', pos)
         else:
             return self.func3('substr', pos, length)
+
+    def min(self):
+        return self.aggregate('min')
+
+    def max(self):
+        return self.aggregate('max')
+
+    def avg(self):
+        return self.aggregate('avg')
+
+    def count(self):
+        return self.aggregate('count')
 
 
 class DBJoinKind(Enum):

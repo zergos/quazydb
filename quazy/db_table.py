@@ -509,7 +509,7 @@ class DBTable(metaclass=MetaTable):
         self.DB.db.delete(item=self)
 
     @classmethod
-    def query(cls) -> DBQuery[typing.Self]:
+    def query(cls) -> DBQuery[Self]:
         """Create DBQuery instance for queries, associated with this table
 
         Hint:
@@ -518,7 +518,13 @@ class DBTable(metaclass=MetaTable):
         cls.check_db()
         return cls.DB.db.query(cls)
 
-    select = query
+    @classmethod
+    def select(cls, *field_names: str, **fields: DBSQL) -> DBQuery[Self]:
+        """Create DBQuery instance and specify selected fields
+
+        Read `DBQuery.select()` for details.
+        """
+        return cls.query().select(*field_names, **fields)
 
     @classmethod
     def _dump_schema(cls) -> dict[str, Any]:
