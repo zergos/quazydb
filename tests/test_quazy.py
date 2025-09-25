@@ -80,7 +80,7 @@ class ItemCatalog(Catalog):
 
 
 class GroupCatalog(Catalog):
-    random_id: int = DBField(default=lambda : random.randint(1000, 2000))
+    random_id: int = DBField(default=lambda x: random.randint(1000, 2000))
 
 
 class User(NamedTable):
