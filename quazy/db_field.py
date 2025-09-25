@@ -42,7 +42,7 @@ class DBField:
     required: bool = data_field(default=True, init=False)
     indexed: bool = False
     unique: bool = False
-    default: Union[Any, Callable[[], Any]] = None
+    default: Union[Any, Callable[[DBTable], Any]] = None
     default_sql: str = None
     reverse_name: str = None
     # many_field: bool = data_field(default=False, init=False)
