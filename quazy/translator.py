@@ -235,7 +235,7 @@ class Translator:
         return value
 
     @classmethod
-    def insert(cls, table: type[DBTable], fields: list[tuple[DBField, Any]]) -> tuple[str, dict[str, Any]]:
+    def insert(cls, item: DBTable, fields: list[tuple[DBField, Any]]) -> tuple[str, dict[str, Any]]:
         sql_values: list[str] = []
         values: dict[str, Any] = {}
         body_values: dict[str, Any] = {}
@@ -254,7 +254,7 @@ class Translator:
                         if not callable(field.default):
                             values[f'v{idx}'] = field.default
                         else:
-                            values[f'v{idx}'] = field.default()
+                            values[f'v{idx}'] = field.default(item)
                         idx += 1
                 else:
                     sql_values.append(f'%(v{idx})s')
@@ -272,7 +272,7 @@ class Translator:
                         if not callable(field.default):
                             values[f'v{idx}'] = field.default
                         else:
-                            values[f'v{idx}'] = field.default()
+                            values[f'v{idx}'] = field.default(item)
                         idx += 1
                 else:
                     body_values[field.name] = cls.json_serialize(field, f'%(v{idx})s')
@@ -283,10 +283,10 @@ class Translator:
         columns = ','.join(f'"{field.column}"' for field, _ in fields if not field.default_sql and not field.prop and not field.body)
         row = ','.join(sql_values)
 
-        if table.DB.body:
+        if item.DB.body:
             if columns:
                 columns += ','
-            columns += f'"{table.DB.body.column}"'
+            columns += f'"{item.DB.body.column}"'
             if body_values:
                 body_value = ', '.join(f"'{name}',{value}" for name, value in body_values.items())
                 body_value = f'json_build_object({body_value})'
@@ -296,7 +296,7 @@ class Translator:
                 row += ','
             row += body_value
 
-        res = f'INSERT INTO {cls.table_name(table)} ({columns}) VALUES ({row}) RETURNING "{table.DB.pk.column}"'
+        res = f'INSERT INTO {cls.table_name(item)} ({columns}) VALUES ({row}) RETURNING "{item.DB.pk.column}"'
         return res, values
 
     @classmethod

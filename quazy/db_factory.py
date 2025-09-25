@@ -113,7 +113,7 @@ class DBFactory:
         return cls
 
     def use_module(self, name: str = None, schema: str = 'public'):
-        """Use a specific module by name with factory instance
+        """Use a specific module by name with a factory instance
 
         Args:
             name: module name to use. If not specified, uses current module
@@ -360,7 +360,7 @@ class DBFactory:
                             conn.execute(self._trans.add_reference(table, field))
 
     def insert(self, item: T) -> T:
-        """Insert item into database
+        """Insert item into the database
 
         Args:
             item: instance of DBTable to insert
@@ -389,7 +389,7 @@ class DBFactory:
 
         with self.connection() as conn:  # type: psycopg.Connection
 
-            sql, values = self._trans.insert(item.__class__, fields)
+            sql, values = self._trans.insert(item, fields)
             item.pk = conn.execute(sql, values).fetchone()[0]
 
             for field_name, table in item.DB.subtables.items():
@@ -398,7 +398,7 @@ class DBFactory:
                     fields.clear()
                     for name, field in table.DB.fields.items():
                         fields.append((field, getattr(row, name, DefaultValue)))
-                    sql, values = self._trans.insert(row.__class__, fields)
+                    sql, values = self._trans.insert(row, fields)
                     new_sub_id = conn.execute(sql, values).fetchone()[0]
                     setattr(row, table.DB.pk.name, new_sub_id)
 
@@ -444,7 +444,7 @@ class DBFactory:
             updated item, just for chain calls
 
         Note:
-            If item instance has subtables of subclasses, they will be bulk updated (delete + insert).
+            If an item instance has subtables of subclasses, they will be bulk updated (delete and insert).
         """
         item._before_update(self)
         fields: list[tuple[DBField, Any]] = []
