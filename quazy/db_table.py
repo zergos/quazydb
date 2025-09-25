@@ -111,7 +111,7 @@ class MetaTable(type):
                 field = DBField(default=field)
                 field.prepare(name)
                 field.type = t
-                field.required = False
+                field.required = True
 
             fields[name] = field
 
