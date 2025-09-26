@@ -39,11 +39,12 @@ class DBQueryField(typing.Generic[T]):
 
         if not self._field:
             if self._path not in self._query.joins:
-                self._query.joins[self._path] = DBJoin(self._table, DBJoinKind.SOURCE)
+                self._query.joins[self._path] = DBJoin(DBJoinKind.SOURCE, self._table)
         else:
             join_path = f'{self._table.DB.snake_name}__{self._field.name}'
             if join_path not in self._query.joins:
-                self._query.joins[join_path] = DBJoin(self._field.type, DBJoinKind.LEFT,
+                join_kind = DBJoinKind.INNER if self._field.required else DBJoinKind.LEFT
+                self._query.joins[join_path] = DBJoin(join_kind, self._field.type,
                                                       f'{self._path} = {join_path}.{self._field.type.DB.pk.name}')
             return getattr(DBQueryField(self._query, self._field.type, join_path), item)
 
@@ -63,16 +64,25 @@ class DBQueryField(typing.Generic[T]):
         elif table := DB.subtables.get(item):
             join_path = f'{self._path}__{item}'
             if join_path not in self._query.joins:
-                self._query.joins[join_path] = DBJoin(table, DBJoinKind.LEFT,
+                self._query.joins[join_path] = DBJoin(DBJoinKind.INNER, table,
                                                   f'{self._path}.{DB.pk.name} = {join_path}.{DB.table}')
             return DBQueryField(self._query, table, join_path)
 
         elif  many_field := DB.many_fields.get(item):
             join_path = f'{self._path}__{item}'
             if join_path not in self._query.joins:
-                self._query.joins[join_path] = DBJoin(many_field.source_table, DBJoinKind.LEFT,
-                                                  f'{self._table.DB.snake_name}.{DB.pk.name} = {join_path}.{DB.table}')
-            return DBQueryField(self._query, many_field.source_table, join_path)
+                self._query.joins[join_path] = DBJoin(DBJoinKind.INNER, many_field.foreign_table,
+                                                  f'{self._table.DB.snake_name}.{DB.pk.name} = {join_path}.{many_field.foreign_field}')
+            return DBQueryField(self._query, many_field.foreign_table, join_path)
+
+        elif many_to_many_field := DB.many_to_many_fields.get(item):
+            join_path = f'{self._path}__{item}'
+            if join_path not in self._query.joins:
+                self._query.joins[f'_{join_path}'] = DBJoin(DBJoinKind.INNER, many_to_many_field.middle_table,
+                                                  f'{self._table.DB.snake_name}.{DB.pk.name} = _{join_path}.{many_to_many_field.foreign_field}')
+                self._query.joins[join_path] = DBJoin(DBJoinKind.INNER, many_to_many_field.foreign_table,
+                                                  f'_{join_path}.{many_to_many_field.foreign_table.DB.table} = {join_path}.{many_to_many_field.foreign_table.DB.pk.name}')
+            return DBQueryField(self._query, many_to_many_field.foreign_table, join_path)
 
         raise QuazyFieldNameError(f'field `{item}` is not found in `{DB.table}`')
     
@@ -107,7 +117,7 @@ class DBSubqueryField:
             return super().__getattribute__(item)
 
         if self._path not in self._query.joins:
-            self._query.joins[self._path] = DBJoin(self._subquery, DBJoinKind.SOURCE)
+            self._query.joins[self._path] = DBJoin(DBJoinKind.SOURCE, self._subquery)
 
         if item in self._subquery.fields:
             return DBSQL(self._query, f'{self._path}.{item}')
@@ -382,8 +392,8 @@ class DBJoinKind(Enum):
 
 @dataclass
 class DBJoin:
-    source: Union[type[DBTable], DBQuery]
     kind: DBJoinKind
+    with_table: Union[type[DBTable], DBQuery]
     condition: Optional[Union[str, DBSQL]] = None
 
 
@@ -448,7 +458,7 @@ class DBQuery(typing.Generic[T]):
 
         if self.table_class is not None:
             if not for_copy:
-                self.joins[self.table_class.DB.snake_name] = DBJoin(self.table_class, DBJoinKind.SOURCE)
+                self.joins[self.table_class.DB.snake_name] = DBJoin(DBJoinKind.SOURCE, self.table_class)
             table_space = DBQueryField(self, self.table_class)
             setattr(table_space, '_db', self.scheme)
             self.scheme = table_space
@@ -585,10 +595,16 @@ class DBQuery(typing.Generic[T]):
             return DBSQL(self, expr)
         if isinstance(expr, DBConditionField):
             return expr.build()
+        if isinstance(expr, DBTable):
+            if not self.table_class:
+                raise QuazyFieldTypeError('Table is not bound to a query')
+            if self.table_class != expr:
+                raise QuazyFieldTypeError(f'Can not filter table `{self.table_class.__qualname__}` by the instance of `{expr.__class__.__qualname__}`')
+            return self.scheme.pk == expr
         raise QuazyFieldTypeError('Expression type not supported')
 
     def with_query(self, subquery: DBQuery, not_materialized: bool = False) -> DBSubqueryField:
-        """Use another query result fields for this query.
+        """Use another query result field for this query.
 
         Example:
             .. code-block:: python
@@ -600,7 +616,7 @@ class DBQuery(typing.Generic[T]):
 
         Arguments:
             subquery: subquery to use
-            not_materialized: ask database engine to not request whole query result set
+            not_materialized: ask the database engine to not request a whole query result set
 
         Returns:
             `DBSubqueryField` with result field names directly accessible for expressions
@@ -614,9 +630,9 @@ class DBQuery(typing.Generic[T]):
         return DBSubqueryField(self, subquery)
 
     def select(self, *field_names: str, **fields: FDBSQL) -> DBQuery[T]:
-        """Specify list of selected fields
+        """Specify a list of selected fields
 
-        Don't call this method if you want to fetch list of `DBTable` instances (with all fields).
+        Don't call this method if you want to fetch a list of `DBTable` instances (with all fields).
         Otherwise, include 'pk' in `field_names` or you will get a list of named tuples.
 
         Arguments:
@@ -641,7 +657,7 @@ class DBQuery(typing.Generic[T]):
     def select_all(self) -> DBQuery[T]:
         """Select all possible fields for this query.
 
-        This is similar to `SELECT * FROM ...` query.
+        This is similar to a `SELECT * FROM ...` query.
 
         Note:
             This method prevents fetching `DBTable` instances to avoid collision with specific fields.
@@ -656,7 +672,7 @@ class DBQuery(typing.Generic[T]):
     def distinct(self) -> DBQuery[T]:
         """Select only different rows for this query.
 
-        Add `DISTINCT` clause to `SELECT ...` statement.
+        Add a `DISTINCT` clause to a `SELECT ...` statement.
         """
         self.is_distinct = True
         return self
@@ -675,10 +691,10 @@ class DBQuery(typing.Generic[T]):
             self.sort_list.append(self.resolve(field) if not desc else self.resolve(field).postfix('DESC'))
         return self
 
-    def filter(self, _expression: FDBSQL = None, **kwargs) -> DBQuery[T]:
+    def filter(self, _expression: FDBSQL | DBTable = None, **kwargs) -> DBQuery[T]:
         """Add filter to a query
 
-        Filter can be applied by common lambda expression or by specific field/value pairs.
+        Filter can be applied by a common lambda expression or by specific field/value pairs.
 
         Hint:
             Use identical method name `where` for your preference.
@@ -711,9 +727,9 @@ class DBQuery(typing.Generic[T]):
     where = filter
 
     def exclude(self, _expression: FDBSQL = None, **kwargs) -> DBQuery[T]:
-        """Filter elements to exclude from query
+        """Filter elements to exclude from a query
 
-        Works like negative filter (excluding elements from a selection)
+        Works like a negative filter (excluding elements from a selection)
 
         Example:
             .. code-block:: python

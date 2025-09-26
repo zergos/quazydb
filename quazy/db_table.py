@@ -13,7 +13,7 @@ from .exceptions import *
 if typing.TYPE_CHECKING:
     from typing import *
     from .db_factory import DBFactory
-    from .db_query import DBQuery, DBQueryField, DBSQL
+    from .db_query import DBQuery, DBQueryField, DBSQL, FDBSQL
 
 __all__ = ['DBTable']
 
@@ -191,9 +191,9 @@ class DBTable(metaclass=MetaTable):
     _modified_fields_: set[str]
 
     class DB:
-        """DBTable meta subclass with internal information
+        """DBTable meta-subclass with internal information
 
-        It has only class based attributes, intended for read only. Instances isn't supported.
+        It has only class-based attributes, intended for read-only. Instances aren't supported.
 
         Attributes:
             db:                     `DBFactory` linked to a table, if already specified
@@ -286,6 +286,7 @@ class DBTable(metaclass=MetaTable):
             if inspect.isclass(t) and issubclass(t, DBTable):
                 cls.DB.subtables[t.DB.snake_name] = t
                 t.DB.schema = cls.DB.schema
+                t.DB.db = cls.DB.db
                 t.resolve_types(globalns)
 
     @classmethod
@@ -382,15 +383,15 @@ class DBTable(metaclass=MetaTable):
                     if field.type.DB.many_fields[rev_name].source_table is not cls:
                         raise QuazyFieldNameError(
                             f'Cannot reuse Many field in table `{field.type.__name__}` with name `{rev_name}`, it is associated with table `{field.type.DB.many_fields[rev_name].source_table.__name__}`. Set different `reverse_name`.')
-                    field.type.DB.many_fields[rev_name].source_field = name
+                    field.type.DB.many_fields[rev_name].foreign_field = name
                 else:
                     field.type.DB.many_fields[rev_name] = DBManyField(cls, name)
 
         # check Many fields connected
         for name, field in cls.DB.many_fields.items():
-            if not field.source_field or field.source_field not in field.source_table.DB.fields:
+            if not field.foreign_field or field.foreign_field not in field.foreign_table.DB.fields:
                 raise QuazyFieldTypeError(
-                    f'Cannot find reference from table `{field.source_table.__name__}` to table `{cls.__name__}` to connect with Many field `{name}`. Add field to source table or change field type to `ManyToMany`')
+                    f'Cannot find reference from table `{field.foreign_table.__name__}` to table `{cls.__name__}` to connect with Many field `{name}`. Add field to source table or change field type to `ManyToMany`')
 
         # check and connect ManyToMany fields
         for name, field in cls.DB.many_to_many_fields.items():
@@ -399,15 +400,15 @@ class DBTable(metaclass=MetaTable):
 
             middle_table_name = "{}{}".format(cls.__qualname__, name.capitalize())
             middle_table_inner_name = "{}_{}".format(cls.DB.table, name)
-            rev_name = field.source_field or cls.DB.snake_name
-            if rev_name in field.source_table.DB.many_to_many_fields and field.source_table.DB.many_to_many_fields[
-                rev_name].source_table is not cls:
+            rev_name = field.foreign_field or cls.DB.snake_name
+            if rev_name in field.foreign_table.DB.many_to_many_fields and field.foreign_table.DB.many_to_many_fields[
+                rev_name].foreign_table is not cls:
                 raise QuazyFieldNameError(
-                    f'Cannot reuse ManyToMany field in table `{field.source_table.__name__}` with name `{rev_name}`, it is associated with table `{field.source_table.DB.many_to_many_fields[rev_name].source_table.__name__}`. Set different `reverse_name`.')
+                    f'Cannot reuse ManyToMany field in table `{field.foreign_table.__name__}` with name `{rev_name}`, it is associated with table `{field.foreign_table.DB.many_to_many_fields[rev_name].source_table.__name__}`. Set different `reverse_name`.')
 
-            f1 = DBField(field.source_table.DB.table, indexed=True)
+            f1 = DBField(field.foreign_table.DB.table, indexed=True)
             f1.prepare(f1.column)
-            f1.type = field.source_table
+            f1.type = field.foreign_table
             f1.ref = True
             f2 = DBField(cls.DB.table, indexed=True)
             f2.prepare(f2.column)
@@ -429,9 +430,9 @@ class DBTable(metaclass=MetaTable):
             add_middle_table(TableClass)
 
             field.middle_table = TableClass
-            field.source_field = f2.column
-            field.source_table.DB.many_to_many_fields[rev_name].middle_table = TableClass
-            field.source_table.DB.many_to_many_fields[rev_name].source_field = f1.column
+            field.foreign_field = f2.column
+            field.foreign_table.DB.many_to_many_fields[rev_name].middle_table = TableClass
+            field.foreign_table.DB.many_to_many_fields[rev_name].foreign_field = f1.column
 
     def __init__(self, **initial):
         """DBTable instance constructor
@@ -469,6 +470,10 @@ class DBTable(metaclass=MetaTable):
             self.pk = None
         for field_name in self.DB.subtables:
             setattr(self, field_name, list())
+        for field_name in self.DB.many_fields:
+            setattr(self, field_name, list())
+        for field_name in self.DB.many_to_many_fields:
+            setattr(self, field_name, list())
         self._modified_fields_ = set(initial.keys())
 
     def __setattr__(self, key, value):
@@ -486,22 +491,54 @@ class DBTable(metaclass=MetaTable):
 
         :meta private:"""
         if not cls.DB.db:
-            raise QuazyWrongOperation("Table is not assigned to a database")
+            raise QuazyWrongOperation(f"Table `{cls.__qualname__}` is not assigned to a database")
 
     @classmethod
-    def get(cls, item):
+    def get(cls, pk: Any = None, **fields) -> Self:
         """Get DBTable instance by primary key value
 
         Args:
-            item: primary key value
+            pk: primary key value to get an item (optional)
+            **fields: fields values to find item if no pk is specified (optional)
         """
         cls.check_db()
-        return cls.DB.db.get(cls, item)
+        return cls.DB.db.get(cls, pk, **fields)
 
-    def save(self):
+    def save(self) -> Self:
         """Save DBTable instance changes to a database"""
         self.check_db()
         return self.DB.db.save(self)
+
+    def load(self, selected_field_name: str | None = None) -> Self:
+        """Load related items from foreign tables
+
+        Args:
+            selected_field_name: any related field name to load, if not specified, all related fields will be loaded.
+        """
+        self.check_db()
+        for field_name, table in self.DB.subtables.items():
+            if selected_field_name is None or selected_field_name == field_name:
+                q = self._db_.query(table).filter(lambda x: getattr(x, table.DB.owner.DB.table) == self)
+                setattr(self, field_name, q.fetchall())
+                if selected_field_name is not None:
+                    return self
+
+        for field_name, many_field in self.DB.many_fields.items():
+            if selected_field_name is None or selected_field_name == field_name:
+                q = self._db_.query(many_field.foreign_table).filter(lambda x: getattr(x, many_field.foreign_field) == self)
+                setattr(self, field_name, q.fetchall())
+                if selected_field_name is not None:
+                    return self
+
+        for field_name, many_to_many_field in self.DB.many_to_many_fields.items():
+            if selected_field_name is None or many_to_many_field == selected_field_name:
+                q = self._db_.query(many_to_many_field.foreign_table).filter(
+                    lambda x: getattr(many_to_many_field.foreign_field, many_to_many_field.foreign_table.DB.table) == self)
+                setattr(self, field_name, q.fetchall())
+                if selected_field_name is not None:
+                    return self
+
+        return self
 
     def delete(self):
         """Delete DBTable instance from a database"""
@@ -510,7 +547,7 @@ class DBTable(metaclass=MetaTable):
 
     @classmethod
     def query(cls) -> DBQuery[Self]:
-        """Create DBQuery instance for queries, associated with this table
+        """Create a DBQuery instance for queries associated with this table
 
         Hint:
             Use identical method name `select` for your preference.
@@ -519,8 +556,8 @@ class DBTable(metaclass=MetaTable):
         return cls.DB.db.query(cls)
 
     @classmethod
-    def select(cls, *field_names: str, **fields: DBSQL) -> DBQuery[Self]:
-        """Create DBQuery instance and specify selected fields
+    def select(cls, *field_names: str, **fields: FDBSQL) -> DBQuery[Self]:
+        """Create a DBQuery instance and specify selected fields
 
         Read `DBQuery.select()` for details.
         """
@@ -564,12 +601,12 @@ class DBTable(metaclass=MetaTable):
 
     @property
     def pk(self):
-        """get primary key value"""
+        """get a primary key value"""
         return getattr(self, self.DB.pk.name)
 
     @pk.setter
     def pk(self, value):
-        """set primary key value"""
+        """set a primary key value"""
         setattr(self, self.DB.pk.name, value)
 
     def inspect(self) -> str:
@@ -587,8 +624,8 @@ class DBTable(metaclass=MetaTable):
     def _view(cls, item: DBQueryField[typing.Self]) -> DBQuery[typing.Self] | None:
         """virtual method to override DBTable item presentation
 
-        Originally, each table item is presented as primary key value (integer number for ex.). It is more
-        convenient to see user-friendly presentation, like `name`, `caption` or several field combined.
+        Originally, each table item is presented as a primary key value (integer number for ex.). It is more
+        convenient to see user-friendly presentation, like `name`, `caption` or several fields combined.
 
         Example:
             .. code-block:: python
@@ -619,19 +656,19 @@ class DBTable(metaclass=MetaTable):
         return f'{self.__class__.__name__}({self.pk})'
 
     def _before_update(self, db: DBFactory):
-        """abstract event before update to database"""
+        """abstract event before update to the database"""
 
     def _after_update(self, db: DBFactory):
-        """abstract event after update to database"""
+        """abstract event after update to the database"""
 
     def _before_insert(self, db: DBFactory):
-        """abstract event before insert to database"""
+        """abstract event before insert to the database"""
 
     def _after_insert(self, db: DBFactory):
-        """abstract event after insert to database"""
+        """abstract event after insert to the database"""
 
     def _before_delete(self, db: DBFactory):
-        """abstract event before delete from database"""
+        """abstract event before delete from the database"""
 
     def _after_delete(self, db: DBFactory):
-        """abstract event after delete from database"""
+        """abstract event after delete from the database"""

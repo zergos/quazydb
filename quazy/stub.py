@@ -92,12 +92,12 @@ def gen_stub(db: DBFactory, schema: str = None) -> str:
             var_chunks.append(f'{name}: {type_name(field.type)} = None')
 
         for name, field in table.DB.many_fields.items():
-            field_chunks.append(f'\t{name}: list["{field.source_table.__qualname__}"]')
-            var_chunks.append(f'{name}: list["{field.source_table.__qualname__}"] = None')
+            field_chunks.append(f'\t{name}: list["{field.foreign_table.__qualname__}"]')
+            var_chunks.append(f'{name}: list["{field.foreign_table.__qualname__}"] = None')
 
         for name, field in table.DB.many_to_many_fields.items():
-            field_chunks.append(f'\t{name}: list["{field.source_table.__qualname__}"]')
-            var_chunks.append(f'{name}: list["{field.source_table.__qualname__}"] = None')
+            field_chunks.append(f'\t{name}: list["{field.foreign_table.__qualname__}"]')
+            var_chunks.append(f'{name}: list["{field.foreign_table.__qualname__}"] = None')
 
         for name, field in table.DB.subtables.items():
             field_chunks.append(f'\t{name}: list["{field.__qualname__}"]')

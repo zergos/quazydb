@@ -39,7 +39,7 @@ class DBFactory:
     Use this class to arrange connection to a database, parse table models and run queries.
 
     Note:
-        It supports Postgres database only at the moment
+        It supports a Postgres database only at the moment
 
     Example:
         .. code-block::
@@ -57,7 +57,7 @@ class DBFactory:
     def __init__(self, connection_pool, debug_mode: bool = False):
         """Basic constructor for database connection
 
-        Create connection via specific pool.
+        Create a connection via a specific pool.
 
         Note:
             Normally is not intended to run manually, as it intended to use of proxy constructors
@@ -67,7 +67,7 @@ class DBFactory:
             It is highly appreciated to work with databases supported pools.
 
         Args:
-             connection_pool: Connection pool to work with database
+             connection_pool: Connection pool to work with the database
              debug_mode: Debug mode - writes all queries to logs before execution
         """
         self._connection_pool: psycopg_pool.ConnectionPool = connection_pool
@@ -98,7 +98,7 @@ class DBFactory:
         return DBFactory(pool, debug_mode)
 
     def use(self, cls: type[DBTable], schema: str = 'public'):
-        """Use a specific table with factory instance
+        """Use a specific table with the factory instance
 
         Args:
             cls: Table to use
@@ -107,6 +107,12 @@ class DBFactory:
         cls.DB.db = self
         if not cls.DB.schema:
             cls.DB.schema = schema
+
+        for subtab in cls.DB.subtables.values():
+            subtab.DB.db = self
+            if not subtab.DB.schema:
+                subtab.DB.schema = schema
+
         if cls not in self._tables:
             self._tables.append(cls)
         setattr(self, cls.__name__, cls)
@@ -156,7 +162,7 @@ class DBFactory:
     def query(self, table_class: Optional[type[T]] = None) -> DBQuery[T]:
         """Create DBQuery instance
 
-        Create DBQuery instance bound to a specified DBTable or to the whole schema
+        Create a DBQuery instance bound to a specified DBTable or to the whole schema
 
         Args:
             table_class: DBTable class to use or None
@@ -172,15 +178,15 @@ class DBFactory:
         return DBQuery[T](self, table_class)
 
     def get(self, table_class: type[T], pk: Any = None, **fields) -> T:
-        """Request one row from database table
+        """Request one row from a database table
 
         Hint:
-            This method is not intended to be used directly. It is shorter to call `get` method from `DBTable` instance.
+            This method is not intended to be used directly. It is shorter to call the `get` method from the `DBTable` instance.
 
         Args:
             table_class: DBTable class to use
             pk: primary key value to filter row (optional)
-            **fields: field names and values to filter row if no pk specified (optional)
+            **fields: field values to filter row if no pk is specified (optional)
 
         Returns:
             DBTable instance
@@ -210,13 +216,13 @@ class DBFactory:
                 yield conn
 
     def clear(self, schema: str = None):
-        """Drop all known tables in database
+        """Drop all known tables in a database
 
         Args:
             schema: schema name to use
 
         Warning:
-            It works without attention. Please, double check before calling.
+            It works without attention. Please double-check before calling.
         """
         with self.connection() as conn:  # type: psycopg.Connection
             tables = []
@@ -228,7 +234,7 @@ class DBFactory:
                     conn.execute(f'DROP TABLE {table} CASCADE')
 
     def all_tables(self, schema: str = None, for_stub: bool = False) -> list[type[DBTable]]:
-        """Get all known tables in database
+        """Get all known tables in the database
 
         Args:
             schema: schema name to use
@@ -303,7 +309,7 @@ class DBFactory:
         return all_tables
 
     def missed_tables(self, schema: str = None) -> list[type[DBTable]]:
-        """Get all tables added as models, but not created in database yet
+        """Get all tables added as models but not created in the database yet
 
         :meta private:
         """
@@ -327,14 +333,14 @@ class DBFactory:
         return len(self.missed_tables(schema)) == 0
 
     def table_exists(self, table: DBTable) -> bool:
-        """Check if table exists in database
+        """Check if table exists in the database
 
         :meta private:"""
         with self.select(self._trans.is_table_exists(table)) as res:
             return res.fetchone()[0]
 
     def create(self, schema: str = None):
-        """Create all added tables in database"""
+        """Create all added tables in the database"""
         all_tables = self.missed_tables(schema)
         if not all_tables:
             return
@@ -391,21 +397,18 @@ class DBFactory:
 
             sql, values = self._trans.insert(item, fields)
             item.pk = conn.execute(sql, values).fetchone()[0]
+            conn.commit()
+            item._modified_fields_.clear()
 
             for field_name, table in item.DB.subtables.items():
                 for row in getattr(item, field_name):
                     setattr(row, item.DB.table, item)
-                    fields.clear()
-                    for name, field in table.DB.fields.items():
-                        fields.append((field, getattr(row, name, DefaultValue)))
-                    sql, values = self._trans.insert(row, fields)
-                    new_sub_id = conn.execute(sql, values).fetchone()[0]
-                    setattr(row, table.DB.pk.name, new_sub_id)
+                    self.insert(row)
 
             for field_name, field in item.DB.many_fields.items():
                 for row in getattr(item, field_name):
-                    if getattr(row, field.source_field) != item.pk:
-                        setattr(row, field.source_field, item.pk)
+                    if getattr(row, field.foreign_field) != item.pk:
+                        setattr(row, field.foreign_field, item.pk)
                         self.save(row)
 
             for field_name, field in item.DB.many_to_many_fields.items():
@@ -413,23 +416,12 @@ class DBFactory:
                     if not row.pk:
                         self.save(row)
 
-                # delete old items, add new items
-                new_indices = set(row.pk for row in getattr(item, field_name))
-                old_indices_sql = self._trans.select_many_indices(field.middle_table, field.source_field, field.source_table.DB.table)
-                results = conn.execute(old_indices_sql, {"value": item.pk}).fetchone()
-                old_indices = set(results[0]) if results[0] else set()
-
-                indices_to_delete = list(old_indices - new_indices)
-                indices_to_add = list(new_indices - old_indices)
-
-                if indices_to_delete:
-                    delete_indices_sql = self._trans.delete_many_indices(field.middle_table, field.source_field, field.source_table.DB.table)
-                    conn.execute(delete_indices_sql, {"value": item.pk, "indices": indices_to_delete})
-
-                if indices_to_add:
-                    new_indices_sql = self._trans.insert_many_index(field.middle_table, field.source_field, field.source_table.DB.table)
-                    for index in indices_to_add:
-                        conn.execute(new_indices_sql, {"value": item.pk, "index": index})
+                new_indices_sql = self._trans.insert_many_index(field.middle_table, field.foreign_field,
+                                                                field.foreign_table.DB.table)
+                with conn.cursor() as curr:
+                    with curr.copy(new_indices_sql) as copy:
+                        for row in getattr(item, field_name):
+                            copy.write_row((item.pk, row.pk))
 
         item._after_insert(self)
         return item
@@ -452,33 +444,65 @@ class DBFactory:
             field = item.DB.fields[name]
             fields.append((field, getattr(item, name, DefaultValue)))
         with self.connection() as conn:
-            sql, values = self._trans.update(item.__class__, fields)
-            if not values:
-                return item
-            values['v1'] = getattr(item, item.DB.pk.name)
-            conn.execute(sql, values)
+            if fields:
+                sql, values = self._trans.update(item.__class__, fields)
+                values['v1'] = getattr(item, item.DB.pk.name)
+                conn.execute(sql, values)
+                item._modified_fields_.clear()
 
             for table in item.DB.subtables.values():
                 sql = self._trans.delete_related(table, item.DB.table)
                 conn.execute(sql, (getattr(item, item.DB.pk.name), ))
                 for row in getattr(item, table.DB.snake_name):
                     self.insert(row)
+
+            for field_name, field in item.DB.many_fields.items():
+                for row in getattr(item, field_name):
+                    if getattr(row, field.foreign_field) != item:
+                        setattr(row, field.foreign_field, item)
+                        self.save(row)
+
+            for field_name, field in item.DB.many_to_many_fields.items():
+                for row in getattr(item, field_name):
+                    if not row.pk:
+                        self.save(row)
+
+                # delete old items, add new items
+                new_indices = set(row.pk for row in getattr(item, field_name))
+                old_indices_sql = self._trans.select_many_indices(field.middle_table, field.foreign_field, field.foreign_table.DB.table)
+                results = conn.execute(old_indices_sql, {"value": item.pk}).fetchone()
+                old_indices = set(results[0]) if results[0] else set()
+
+                indices_to_delete = list(old_indices - new_indices)
+                indices_to_add = list(new_indices - old_indices)
+
+                if indices_to_delete:
+                    delete_indices_sql = self._trans.delete_many_indices(field.middle_table, field.foreign_field, field.foreign_table.DB.table)
+                    conn.execute(delete_indices_sql, {"value": item.pk, "indices": indices_to_delete})
+
+                if indices_to_add:
+                    new_indices_sql = self._trans.insert_many_index(field.middle_table, field.foreign_field, field.foreign_table.DB.table)
+                    with conn.cursor() as curr:
+                        with curr.copy(new_indices_sql) as copy:
+                            for index in indices_to_add:
+                                copy.write_row((item.pk, index))
+
         item._after_update(self)
         return item
 
     @contextmanager
     def select(self, query: Union[DBQuery, str], as_dict: bool = False) -> Iterator[DBTable | SimpleNamespace | dict[str, Any]]:
-        """Select items from database
+        """Select items from the database
 
-        It performs prepared query to a database and yields results. Is not intended for direct calls.
+        It performs a prepared query to a database and yields results. Is not intended for direct calls.
         Use preferably `select` method of DBQuery instance.
         Result type depends on query type:
-        if query is based on specific DBTable, result is instance of DBTable
-        if query is based on whole schema, result is SimpleNamespace
+        if a query is based on a specific DBTable, the result is an instance of DBTable
+        if a query is based on a whole schema, the result is SimpleNamespace
 
         Args:
             query: instance of DBQuery or string
-            as_dict: results yields as dict instead of instance of DBTable/SimpleNamespace
+            as_dict: results yield as dict instead of instance of DBTable/SimpleNamespace
 
         Yields:
             instance of DBTable/SimpleNamespace or dict
@@ -503,7 +527,7 @@ class DBFactory:
     def describe(self, query: Union[DBQuery[T], str]) -> list[DBField]:
         """Describe query result fields information
 
-        It performs prepared query to a database requesting zero rows just to collect information about fields.
+        It performs a prepared query to a database requesting zero rows just to collect information about fields.
 
         Args:
             query: instance of DBQuery or string
@@ -550,9 +574,9 @@ class DBFactory:
 
 
     def save(self, item: T, lookup_field: str | None = None) -> T:
-        """Save item to database
+        """Save item to the database
 
-        It checks whether item need to be inserted or updated. Specify `lookup_field` to avoid searching by primary key.
+        It checks whether an item needs to be inserted or updated. Specify `lookup_field` to avoid searching by a primary key.
 
         Args:
             item: instance of DBTable
@@ -587,12 +611,12 @@ class DBFactory:
                query: DBQuery[T] = None,
                filter: Callable[[T], DBSQL] = None,
                reuse_conn: psycopg.Connection = None):
-        """Delete item or items from database
+        """Delete an item or items from the database
 
         It has many possible ways to delete expected items:
          * by item
-         * by table and id (for primary key)
-         * by items list
+         * by table and id (for a primary key)
+         * by item list
          * by query based on DBTable
          * by table and lamba filter
 

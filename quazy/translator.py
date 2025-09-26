@@ -383,10 +383,10 @@ class Translator:
                 op = 'FROM'
             else:
                 op = f'{join.kind.value} JOIN'
-            if inspect.isclass(join.source) and issubclass(join.source, DBTable):
-                joins.append(f'{op} {cls.table_name(join.source)} AS "{join_name}"' + (f'\n\tON {cls.sql_value(join.condition)}' if join.condition else ''))
+            if inspect.isclass(join.with_table) and issubclass(join.with_table, DBTable):
+                joins.append(f'{op} {cls.table_name(join.with_table)} AS "{join_name}"' + (f'\n\tON {cls.sql_value(join.condition)}' if join.condition else ''))
             else:
-                joins.append(f'{op} {cls.subquery_name(join.source)}')
+                joins.append(f'{op} {cls.subquery_name(join.with_table)}')
         filters = []
         group_filters = []
         for filter in query.filters:
@@ -479,8 +479,7 @@ class Translator:
 
     @classmethod
     def insert_many_index(cls, middle_table: type[DBTable], primary_index: str, secondary_index: str) -> str:
-        return f'''INSERT INTO
+        return f'''COPY
             {cls.table_name(middle_table)} ("{primary_index}", "{secondary_index}")
-        VALUES
-            (%(value)s, %(index)s)
+        FROM STDIN
         '''

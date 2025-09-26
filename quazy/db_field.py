@@ -18,12 +18,12 @@ class DBField:
         name:         field name in Python
         column:       field/column name in database
         type:         field type class
-        pk:           is it primary key?
+        pk:           is it a primary key?
         cid:          is it storage of table name for inherited tables ?
-        ref:          is it foreign key (reference) ?
-        body:         is it body field for properties?
-        prop:         is it property field?
-        required:     is field not null ?
+        ref:          is it a foreign key (reference)?
+        body:         is it a body field for properties?
+        prop:         is it a property field?
+        required:     is a field not null ?
         indexed:      is it indexed for fast search ?
         unique:       is it unique ?
         default:      default value at Python level
@@ -143,8 +143,8 @@ class UX:
 
 @dataclass
 class DBManyField:
-    source_table: type[DBTable]
-    source_field: str | None = None
+    foreign_table: type[DBTable]
+    foreign_field: str | None = None
 
 
 @dataclass
