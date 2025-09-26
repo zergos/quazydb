@@ -416,7 +416,7 @@ class DBFactory:
                     if not row.pk:
                         self.save(row)
 
-                new_indices_sql = self._trans.insert_many_index(field.middle_table, field.foreign_field,
+                new_indices_sql = self._trans.insert_many_index(field.middle_table, item.DB.table,
                                                                 field.foreign_table.DB.table)
                 with conn.cursor() as curr:
                     with curr.copy(new_indices_sql) as copy:
@@ -469,7 +469,7 @@ class DBFactory:
 
                 # delete old items, add new items
                 new_indices = set(row.pk for row in getattr(item, field_name))
-                old_indices_sql = self._trans.select_many_indices(field.middle_table, field.foreign_field, field.foreign_table.DB.table)
+                old_indices_sql = self._trans.select_many_indices(field.middle_table, item.DB.table, field.foreign_table.DB.table)
                 results = conn.execute(old_indices_sql, {"value": item.pk}).fetchone()
                 old_indices = set(results[0]) if results[0] else set()
 
@@ -477,11 +477,11 @@ class DBFactory:
                 indices_to_add = list(new_indices - old_indices)
 
                 if indices_to_delete:
-                    delete_indices_sql = self._trans.delete_many_indices(field.middle_table, field.foreign_field, field.foreign_table.DB.table)
+                    delete_indices_sql = self._trans.delete_many_indices(field.middle_table, item.DB.table, field.foreign_table.DB.table)
                     conn.execute(delete_indices_sql, {"value": item.pk, "indices": indices_to_delete})
 
                 if indices_to_add:
-                    new_indices_sql = self._trans.insert_many_index(field.middle_table, field.foreign_field, field.foreign_table.DB.table)
+                    new_indices_sql = self._trans.insert_many_index(field.middle_table, item.DB.table, field.foreign_table.DB.table)
                     with conn.cursor() as curr:
                         with curr.copy(new_indices_sql) as copy:
                             for index in indices_to_add:

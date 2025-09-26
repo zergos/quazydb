@@ -4,7 +4,6 @@ import types
 import re
 import sys
 import inspect
-from typing_extensions import deprecated
 
 from .db_field import DBField, UX, DBManyField, DBManyToManyField
 from .db_types import *
@@ -250,6 +249,9 @@ class DBTable(metaclass=MetaTable):
             if item.startswith('_'):
                 return super().__getattribute__(self, item)
 
+            if item == 'pk' or item == self._table.DB.pk.name:
+                return self._pk_id
+
             related = self._db.query(self._table).select('pk', item).get(self._pk_id)
             return getattr(related, item)
 
@@ -326,7 +328,7 @@ class DBTable(metaclass=MetaTable):
                 elif inspect.isclass(t2) and issubclass(t2, DBTable):
                     field_type = t2
                 else:
-                    raise QuazyFieldTypeError(f'Many type should be reference to other DBTable')
+                    raise QuazyFieldTypeError(f'Many type should be reference to another DBTable')
                 if t.__origin__ is Many:
                     cls.DB.many_fields[field.name] = DBManyField(field_type, field.reverse_name)
                 else:
@@ -430,9 +432,9 @@ class DBTable(metaclass=MetaTable):
             add_middle_table(TableClass)
 
             field.middle_table = TableClass
-            field.foreign_field = f2.column
+            field.foreign_field = rev_name
             field.foreign_table.DB.many_to_many_fields[rev_name].middle_table = TableClass
-            field.foreign_table.DB.many_to_many_fields[rev_name].foreign_field = f1.column
+            field.foreign_table.DB.many_to_many_fields[rev_name].foreign_field = name
 
     def __init__(self, **initial):
         """DBTable instance constructor
@@ -458,7 +460,7 @@ class DBTable(metaclass=MetaTable):
                         continue
                     elif field.ref:
                         view = initial.get(f'{k}__view', None)
-                        setattr(self, k, DBTable.ItemGetter(self._db_, field.type, v, view))
+                        setattr(self, k, DBTable.ItemGetter(self._db_, field.type, v.pk if isinstance(v, DBTable) else v, view))
                         continue
             # else:
             if k not in self.DB.fields and k not in self.DB.many_fields and k not in self.DB.many_to_many_fields:
@@ -533,7 +535,7 @@ class DBTable(metaclass=MetaTable):
         for field_name, many_to_many_field in self.DB.many_to_many_fields.items():
             if selected_field_name is None or many_to_many_field == selected_field_name:
                 q = self._db_.query(many_to_many_field.foreign_table).filter(
-                    lambda x: getattr(many_to_many_field.foreign_field, many_to_many_field.foreign_table.DB.table) == self)
+                    lambda x: getattr(x, many_to_many_field.foreign_field).pk == self)
                 setattr(self, field_name, q.fetchall())
                 if selected_field_name is not None:
                     return self

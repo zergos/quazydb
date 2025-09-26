@@ -62,8 +62,12 @@ class Many(typing.Generic[T]):
     def __iter__(self) -> T: ...
 
 
-class ManyToMany(Many, typing.Generic[T]):
-    pass
+class ManyToMany[T]:
+    def __getitem__(self, item) -> T: ...
+
+    def __setitem__(self, key, value: T): ...
+
+    def __iter__(self) -> T: ...
 
 
 class FieldCID(typing.Generic[T]):

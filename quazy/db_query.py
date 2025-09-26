@@ -30,7 +30,7 @@ class DBQueryField(typing.Generic[T]):
     def __init__(self, query: DBQuery, table: type[T], path: str = None, field: DBField = None):
         self._query: DBQuery[T] = query
         self._table: type[T] = table
-        self._path: str = path or table.DB.snake_name
+        self._path: str = path or table.DB.table
         self._field: DBField = field
 
     def __getattr__(self, item):
@@ -41,20 +41,20 @@ class DBQueryField(typing.Generic[T]):
             if self._path not in self._query.joins:
                 self._query.joins[self._path] = DBJoin(DBJoinKind.SOURCE, self._table)
         else:
-            join_path = f'{self._table.DB.snake_name}__{self._field.name}'
+            join_path = f'{self._table.DB.table}__{self._field.name}s'
             if join_path not in self._query.joins:
                 join_kind = DBJoinKind.INNER if self._field.required else DBJoinKind.LEFT
                 self._query.joins[join_path] = DBJoin(join_kind, self._field.type,
-                                                      f'{self._path} = {join_path}.{self._field.type.DB.pk.name}')
+                                                      f'{self._path} = "{join_path}".{self._field.type.DB.pk.name}')
             return getattr(DBQueryField(self._query, self._field.type, join_path), item)
 
         DB = self._table.DB
         if item in DB.fields:
             field: DBField = DB.fields[item]
             if not field.prop:
-                field_path = f'{self._path}.{item}'
+                field_path = f'"{self._path}".{item}'
             else:
-                field_path = f'{self._path}.{DB.body.name}'
+                field_path = f'"{self._path}".{DB.body.name}'
                 field_path = self._query.db._trans.json_deserialize(field, f"{field_path}->>'{item}'")
 
             if field.ref:
@@ -65,23 +65,25 @@ class DBQueryField(typing.Generic[T]):
             join_path = f'{self._path}__{item}'
             if join_path not in self._query.joins:
                 self._query.joins[join_path] = DBJoin(DBJoinKind.INNER, table,
-                                                  f'{self._path}.{DB.pk.name} = {join_path}.{DB.table}')
+                                                  f'"{self._path}".{DB.pk.name} = "{join_path}".{DB.table}')
             return DBQueryField(self._query, table, join_path)
 
         elif  many_field := DB.many_fields.get(item):
             join_path = f'{self._path}__{item}'
             if join_path not in self._query.joins:
                 self._query.joins[join_path] = DBJoin(DBJoinKind.INNER, many_field.foreign_table,
-                                                  f'{self._table.DB.snake_name}.{DB.pk.name} = {join_path}.{many_field.foreign_field}')
+                                                  f'"{self._path}".{DB.pk.name} = "{join_path}".{many_field.foreign_field}')
             return DBQueryField(self._query, many_field.foreign_table, join_path)
 
         elif many_to_many_field := DB.many_to_many_fields.get(item):
+            join_path_middle = f'{many_to_many_field.middle_table.DB.table}'
+            if join_path_middle not in self._query.joins:
+                self._query.joins[f'{join_path_middle}'] = DBJoin(DBJoinKind.INNER, many_to_many_field.middle_table,
+                                                  f'"{self._path}".{DB.pk.name} = "{join_path_middle}".{self._table.DB.table}')
             join_path = f'{self._path}__{item}'
             if join_path not in self._query.joins:
-                self._query.joins[f'_{join_path}'] = DBJoin(DBJoinKind.INNER, many_to_many_field.middle_table,
-                                                  f'{self._table.DB.snake_name}.{DB.pk.name} = _{join_path}.{many_to_many_field.foreign_field}')
                 self._query.joins[join_path] = DBJoin(DBJoinKind.INNER, many_to_many_field.foreign_table,
-                                                  f'_{join_path}.{many_to_many_field.foreign_table.DB.table} = {join_path}.{many_to_many_field.foreign_table.DB.pk.name}')
+                                                  f'"{join_path_middle}".{many_to_many_field.foreign_table.DB.table} = "{join_path}".{many_to_many_field.foreign_table.DB.pk.name}')
             return DBQueryField(self._query, many_to_many_field.foreign_table, join_path)
 
         raise QuazyFieldNameError(f'field `{item}` is not found in `{DB.table}`')
@@ -458,7 +460,7 @@ class DBQuery(typing.Generic[T]):
 
         if self.table_class is not None:
             if not for_copy:
-                self.joins[self.table_class.DB.snake_name] = DBJoin(DBJoinKind.SOURCE, self.table_class)
+                self.joins[self.table_class.DB.table] = DBJoin(DBJoinKind.SOURCE, self.table_class)
             table_space = DBQueryField(self, self.table_class)
             setattr(table_space, '_db', self.scheme)
             self.scheme = table_space
@@ -507,10 +509,10 @@ class DBQuery(typing.Generic[T]):
         """Scheme object for query context
 
         Scheme contains
-         * snake names of all tables assigned to a database, if query is not bound to a table
+         * snake names of all tables assigned to a database, if a query is not bound to a table
          * all fields otherwise
 
-        Each attribute of a scheme works as expression generator.
+        Each attribute of a scheme works as an expression generator.
         """
         yield self.scheme
 
@@ -571,7 +573,7 @@ class DBQuery(typing.Generic[T]):
         self.args[key] = value
 
     def resolve(self, expr: FDBSQL, scheme: SimpleNamespace = None) -> DBSQL:
-        """Makes lambdas, strings and integers as a part of expression
+        """Makes lambdas, strings and integers as a part of the expression
 
         This method is intended to process filters, sorting and select expressions.
 
@@ -908,7 +910,7 @@ class DBQuery(typing.Generic[T]):
             return curr.fetchone()
 
     def get(self, pk_id: Any) -> T | None:
-        """Request and get one row by primary key identifier"""
+        """Request and get one row by the primary key identifier"""
         if not self.fetch_objects:
             raise QuazyWrongOperation("`get` possible for objects query")
         self.filters.clear()
