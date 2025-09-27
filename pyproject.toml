@@ -29,4 +29,4 @@ package-dir = {quazy = "quazy"}
 
 [tool.setuptools.dynamic]
 version = {attr = "quazy.VERSION"}
-readme = {file = ["README.md"]}
+readme = {file = ["README.rst"]}
