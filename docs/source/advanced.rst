@@ -213,6 +213,179 @@ Substitute tables
     print("Total sum:", q.fetch_sum("total"))
     print("Items:", ", ".join(q.fetchlist()))
 
-Extendable tables
-=================
+Meta tables
+===========
+
+Normally, you can inherit tables one to another. It will create both tables in database with the same set of fields.
+
+..  code-block:: python
+
+    class Fruit(DBTable):
+        name: str
+
+    class Animal(Fruit):
+        # "name" field inherited
+        age: int
+
+But if you have groups of common usable tables fields, you can use "meta" tables as base classes for your tables:
+
+..  code-block:: python
+
+    # everybody used to has a name
+    class NamedTable(DBTable):
+        _meta_ = True
+        name: str
+
+    class Fruit(NamedTable):
+        pass
+
+    class User(NamedTable):
+        pass
+
+    # let's make it globally distributed
+    class GlobalTable(DBTable):
+        _meta_ = True
+        uuid: UUID = DBField(pk=True)
+
+    class Sale(GlobalTable):
+        pass
+
+    class Transaction(GlobalTable):
+        pass
+
+    # use multiple meta-tables at once
+    class Customer(NamedTable, GlobalTable):
+        pass
+
+
+Joined Table Inheritance
+========================
+
+Let's imaging you have several catalogs with it's own specific fields, but the same logic processing, storing and
+presentation. It's usually a normal practice to store all such catalogs in one physical table.
+
+It is supposed that one additional field must be provided, with table identifier, to separate datas.
+In QuazyDB such field is provided via `FieldCID[]` annotation. Actual type could be any, but if it is a string, QuazyDB
+engine fill it by table class name by default. Otherwise, `_discriminator_` value should be provided.
+
+.. hint:: Query engine deals with this logic implicitly, adding proper folter to discriminator field for any requests.
+
+In the example below only one table created in database, named `catalog`.
+
+..  code-block:: python
+
+    class Catalog(DBTable):
+        _extendable_ = True
+        cid: FieldCID[str]
+        number: int
+
+    class Supplier(Catalog):
+        name: str
+        agreement: str | None
+
+    class Customer(Catalog):
+        name: str
+        start_date: datetime
+        vip_class: int | None
+
+    Supplier(number=99, name="Golden nuts").save()
+    Customer(number=56, name="Hungry mouse").save()
+
+    print(Supplier.select("name").fetchlist())
+    print(Customer.select("name").fetchlist())
+
+
+Lightweight JSON properties
+===========================
+
+Every modern database engine has a support to JSON field types. More then that, it gives rich features to use
+in-JSON fields in SQL queries for sophisticated selections and filters.
+
+..  admonition:: Why should we care?
+
+    Let's imagine you have users registry on your social networking platform. How many fields you have to add to your
+    `User` table to satisfy all needs? You can't be sure about amount, but you are pretty sure that every little change
+    to a database could a painful enough. So, why don't you just put all user-specific fields in one JSON field and
+    forget about any migration pain ever?
+
+QuazyDB is intruduced special annotation generic `Property[]`, which points that field belongs to JSON structure.
+It is also obligated to specify special `body` (or any other name) field with type `BodyField`.
+
+..  note::
+
+    Property can not be marked as `required`, because it is in the essence of it's dynamic nature.
+    It also can not have `default_sql` value.
+
+..  code-block:: python
+
+    # this table is created with only one column `body`
+    class Journal(NamedTable):
+        body: FieldBody
+        title: Property[str]
+        price: Property[float]
+        pub_date: Property[datetime]
+
+    Journal(title="Xakep", price=9.99, pub_date=datetime(2010, 1, 10)).save()
+    Journal.get(title="Xakep").inspect()
+
+
+IDE-friendly code completion
+============================
+
+To code even more faster, there are several IDE friendly tricks performed:
+ * `Query` object is based on `Generic[T]`, where `T` is a specific `DBTable` class. It helps to access table fields
+   for query results.
+ * There are many fields implicitly created. To make it visible, generate stub `pyi` helper file.
+ * Stub files also describe constructor arguments names.
+
+..  code-block:: python
+
+    from quazy.stub import gen_stub
+
+    # generate stub file
+    with open("test.pyi", "wt") as f:
+        f.write(gen_stub(db))
+
+There is an example of generated stub:
+
+..  code-block:: python
+    :caption: Source code
+
+    class User(DBTable):
+        name: str
+
+    class Task(DBTable):
+        title: str
+        sender: User = DBField(reverse_name="tasks_send")
+        receiver: User = DBField(reverse_name="tasks_received")
+
+        class History(DBTable):
+            record_date: datetime = DBField(default_sql="now()")
+            description: str | None
+
+..  code-block:: python
+    :caption: Stub file
+
+    class User(DBTable):
+        name: str
+        id: int
+        tasks_send: list["Task"]
+        tasks_received: list["Task"]
+        def __init__(self, name: str = None, id: int = None, tasks_send: list["Task"] = None, tasks_received: list["Task"] = None): ...
+
+
+    class Task(DBTable):
+        title: str
+        sender: "User"
+        receiver: "User"
+        id: int
+        historys: list["Task.History"]
+        def __init__(self, title: str = None, sender: "User" = None, receiver: "User" = None, id: int = None, historys: list["Task.History"] = None): ...
+
+        class History(DBTable):
+            record_date: datetime | None
+            description: str | None
+            id: int
+            task: "Task"
+            def __init__(self, record_date: datetime = None, description: str = None, id: int = None, task: "Task" = None): ...
 
