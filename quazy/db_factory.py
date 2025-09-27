@@ -362,7 +362,7 @@ class DBFactory:
 
                 for table in all_tables:
                     for field in table.DB.fields.values():
-                        if field.ref and not field.prop:
+                        if field.ref and not field.property:
                             conn.execute(self._trans.add_reference(table, field))
 
     def insert(self, item: T) -> T:

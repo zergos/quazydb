@@ -22,7 +22,7 @@ class DBField:
         cid:          is it storage of table name for inherited tables ?
         ref:          is it a foreign key (reference)?
         body:         is it a body field for properties?
-        prop:         is it a property field?
+        property:     is it a property field?
         required:     is a field not null ?
         indexed:      is it indexed for fast search ?
         unique:       is it unique ?
@@ -38,7 +38,7 @@ class DBField:
     cid: bool = False
     ref: bool = data_field(default=False, init=False)
     body: bool = False
-    prop: bool = False
+    property: bool = False
     required: bool = data_field(default=True, init=False)
     indexed: bool = False
     unique: bool = False

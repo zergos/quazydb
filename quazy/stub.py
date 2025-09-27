@@ -78,8 +78,8 @@ def gen_stub(db: DBFactory, schema: str = None) -> str:
         field_chunks = []
         var_chunks = ['self']
         for name, field in table.DB.fields.items():
-            if field.prop:
-                field_type = f'{type_name(field.type)}'
+            if field.property:
+                field_type = f'{type_name(field.type)} | None'
             elif field.body:
                 field_type = 'dict[str, typing.Any]'
             elif field.cid:
@@ -103,7 +103,10 @@ def gen_stub(db: DBFactory, schema: str = None) -> str:
             field_chunks.append(f'\t{name}: list["{field.__qualname__}"]')
             var_chunks.append(f'{name}: list["{field.__qualname__}"] = None')
 
-        init_chunk = f'\n\tdef __init__(' + ', '.join(var_chunks) + '): ...\n'
+        if not table.DB.meta:
+            init_chunk = f'\n\tdef __init__(' + ', '.join(var_chunks) + '): ...\n'
+        else:
+            init_chunk = ''
 
         table_chunk = f"class {table.__name__}({', '.join(base.__qualname__ for base in table.__bases__)}):\n" + \
             '\n'.join(field_chunks) + \

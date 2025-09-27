@@ -51,7 +51,7 @@ class DBQueryField(typing.Generic[T]):
         DB = self._table.DB
         if item in DB.fields:
             field: DBField = DB.fields[item]
-            if not field.prop:
+            if not field.property:
                 field_path = f'"{self._path}".{item}'
             else:
                 field_path = f'"{self._path}".{DB.body.name}'

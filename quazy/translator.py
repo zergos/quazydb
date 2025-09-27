@@ -160,7 +160,7 @@ class Translator:
             f'"{field.column}" {cls.type_name(field)} {cls.column_options(field, table)}'
             for field in table.DB.fields.values()
             #if not field.many_field and not field.prop
-            if not field.prop
+            if not field.property
         )
         res = f'CREATE TABLE {cls.table_name(table)} ({cols})'
         return res
@@ -241,7 +241,7 @@ class Translator:
         body_values: dict[str, Any] = {}
         idx = 1
         for field, value in fields:
-            if not field.prop:  # attr
+            if not field.property:  # attr
                 if field.default_sql or field.body:
                     continue
                 if field.pk:
@@ -280,7 +280,7 @@ class Translator:
                     idx += 1
 
         #columns = ','.join(f'"{field.column}"' for field, _ in fields if not field.many_field)
-        columns = ','.join(f'"{field.column}"' for field, _ in fields if not field.default_sql and not field.prop and not field.body)
+        columns = ','.join(f'"{field.column}"' for field, _ in fields if not field.default_sql and not field.property and not field.body)
         row = ','.join(sql_values)
 
         if item.DB.body:
@@ -322,7 +322,7 @@ class Translator:
         sets: list[str] = []
         props: list[str] = []
         for field, sql_value in zip(filtered, sql_values):
-            if not field[0].prop:
+            if not field[0].property:
                 sets.append(f'"{field[0].column}" = {sql_value}')
             else:
                 props.append("'{}',{}".format(field[0].column, cls.json_serialize(field[0], sql_value)))

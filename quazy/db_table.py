@@ -341,7 +341,8 @@ class DBTable(metaclass=MetaTable):
                 return
 
             elif t.__origin__ is Property:
-                field.prop = True
+                field.property = True
+                field.required = False
                 cls.resolve_type(t.__args__[0], field, globalns)
                 return
 

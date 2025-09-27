@@ -219,8 +219,8 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
     for t_name, table_old in tables_old.items():
         table_new = tables_new[t_name]
 
-        fields_old = {f.column: f for f in table_old.DB.fields.values() if not f.prop}
-        fields_new = {f.column: f for f in table_new.DB.fields.values() if not f.prop}
+        fields_old = {f.column: f for f in table_old.DB.fields.values() if not f.property}
+        fields_new = {f.column: f for f in table_new.DB.fields.values() if not f.property}
         
         # 4.1. Check new fields
         fields_to_add = {f_name: f for f_name, f in fields_new.items() if f_name not in fields_old}
