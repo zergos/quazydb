@@ -1,7 +1,7 @@
 quazydb
 #######
 
-.. image:: /docs/source/images/logo_mini.png
+.. image:: https://raw.githubusercontent.com/zergos/quazydb/master/docs/source/images/logo_mini.png
 
 Powerful yet simple Python ORM
 
