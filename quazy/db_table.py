@@ -40,6 +40,9 @@ class MetaTable(type):
             if value := attrs.pop(src_name, None):
                 spec_attrs[name] = value
 
+        if 'title' not in spec_attrs:
+            spec_attrs['title'] = clsname
+
         DB = typing.cast(type[DBTable.DB], super().__new__(cls, clsname + 'DB', (cls.db_base_class,), spec_attrs))
         attrs['DB'] = DB
 
@@ -656,7 +659,7 @@ class DBTable(metaclass=MetaTable):
         return self.pk != other.pk if isinstance(other, DBTable) else other
 
     def __str__(self):
-        return f'{self.__class__.__name__}({self.pk})'
+        return f'{self.DB.title}({self.pk})'
 
     def _before_update(self, db: DBFactory):
         """abstract event before update to the database"""
