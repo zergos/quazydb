@@ -100,9 +100,6 @@ class DBQueryField(typing.Generic[T]):
     def __ne__(self, other) -> DBSQL:
         return DBSQL(self._query, self._path) != other
 
-    def __contains__(self, item) -> DBSQL:
-        return typing.cast(DBSQL, item in DBSQL(self._query, self._path))
-
     @property
     def pk(self):
         return getattr(self, self._table.DB.pk.name)
@@ -280,12 +277,16 @@ class DBSQL:
         return self.arg(other) ^ self
 
     def __invert__(self) -> DBSQL:
-        #return self.func1('~')
         return self.func1("NOT")
 
+    def invert(self) -> DBSQL:
+        return self.func1('~')
+
     def __lshift__(self, other) -> DBSQL:
-        # return self.op('<<', other)
         return self.op(" IN ", other)
+
+    def lshift(self, other) -> DBSQL:
+        return self.op('<<', other)
 
     def __rlshift__(self, other) -> DBSQL:
         return self.arg(other) << self
