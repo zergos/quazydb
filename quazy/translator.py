@@ -10,7 +10,7 @@ import typing
 if typing.TYPE_CHECKING:
     from typing import *
     from . import DBTable, DBField
-    from .db_query import DBQuery, DBSQL, DBJoinKind, DBWithClause, DBQueryField, DBSubqueryField
+    from .db_query import DBQuery, DBSQL, DBJoinKind, DBWithClause, DBQueryField, DBSubqueryField, DBChainedFilter
 
 
 class Translator:
@@ -226,9 +226,10 @@ class Translator:
 
     @classmethod
     def get_value(cls, field: DBField, value: Any) -> Any:
+        from .db_table import DBTable
         if field.type is dict:
             return json.dumps(value)
-        if field.ref:
+        if field.ref and isinstance(value, DBTable):
             return getattr(value, field.type.DB.pk.name)
         if issubclass(field.type, IntEnum):
             return value.value
@@ -335,7 +336,7 @@ class Translator:
             sets_sql += f'"{table.DB.body.column}" = "{table.DB.body.column}" || json_build_object({body_value})'
 
         if query is None:
-            where_sql = '"{table.DB.pk.column}" = %(pk)s'
+            where_sql = f'"{table.DB.pk.column}" = %(pk)s'
         elif isinstance(query, str):
             where_sql = query
         else:
@@ -369,13 +370,30 @@ class Translator:
         return sql
 
     @classmethod
-    def select(cls, query: DBQuery) -> str:
+    def select(cls, query: DBQuery, chained_mode: int = 0) -> str:
         from .db_query import DBJoinKind, DBQueryField
         from .db_table import DBTable
 
         sql = ''
-        if query.with_queries:
+        if chained_mode == 0 and query.with_queries:
             sql += cls.with_select(query.with_queries)
+
+        if chained_mode == 0 and query.chained_opts:
+            sql_part1 = cls.select(query, 1)
+            sql_part2 = cls.select(query, 2)
+            chained_sql = f'''
+WITH RECURSIVE "_chain" AS (
+{sql_part1}
+UNION
+{sql_part2}
+)
+'''
+            if sql:
+                sql = sql.replace("WITH", f'{chained_sql},\n')
+            else:
+                sql = chained_sql
+            sql += f'SELECT * FROM "_chain"'
+            return sql
 
         sql += 'SELECT\n'
         if query.is_distinct:
@@ -397,9 +415,13 @@ class Translator:
                 joins.append(f'{op} {cls.table_name(join.with_table)} AS "{join_name}"' + (f'\n\tON {cls.sql_value(join.condition)}' if join.condition else ''))
             else:
                 joins.append(f'{op} {cls.subquery_name(join.with_table)}')
+        if chained_mode == 2:
+            joins.append(f'INNER JOIN "_chain" as "_chain" \n\tON "{query.table_class.DB.table}"."{query.chained_opts.id_name}" = "_chain"."{query.chained_opts.next_name}"')
 
         filters = []
         group_filters = []
+        if chained_mode == 1:
+            filters.append(f'"{query.table_class.DB.table}"."{query.chained_opts.id_name}" = {query.chained_opts.sql_value}')
         for filter in query.filters:
             filters.append(cls.sql_value(filter))
         for group_filter in query.group_filters:

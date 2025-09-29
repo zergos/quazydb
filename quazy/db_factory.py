@@ -333,7 +333,7 @@ class DBFactory:
         return len(self.missed_tables(schema)) == 0
 
     def table_exists(self, table: DBTable) -> bool:
-        """Check if table exists in the database
+        """Check if a table exists in the database
 
         :meta private:"""
         with self.select(self._trans.is_table_exists(table)) as res:

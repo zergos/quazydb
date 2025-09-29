@@ -405,6 +405,10 @@ class DBWithClause:
     query: DBQuery
     not_materialized: bool
 
+class DBChainedFilter(typing.NamedTuple):
+    id_name: str
+    next_name: str
+    sql_value: Any
 
 class DBScheme(SimpleNamespace):
     pass
@@ -443,6 +447,7 @@ class DBQuery(typing.Generic[T]):
         self.joins: OrderedDict[str, DBJoin] = OrderedDict()
         self.sort_list: list[DBSQL] = []
         self.filters: list[DBSQL] = []
+        self.chained_opts: DBChainedFilter | None = None
         self.groups: list[DBSQL] = []
         self.group_filters: list[DBSQL] = []
         self.has_aggregates: bool = False
@@ -1025,3 +1030,26 @@ class DBQuery(typing.Generic[T]):
     def update(self, **values) -> DBQuery[T]:
         """Updates the current query object with the specified values"""
         return self.db.update_many(self, **values)
+
+    def chained(self, id_name: str, next_name: str, start_value: Any) -> DBQuery[T]:
+        """Select chained rows via recursive request
+
+        Arguments:
+            id_name: name of the field with an original identifier
+            next_name: name of the field with an identifier of the next row
+            start_value: starting identifier value for the first row in the chain
+
+        Example:
+            ..  code-block:: python
+
+                class Chained(DBTable):
+                    index: int
+                    next: int
+                    name: str
+
+                q = Chained.select("name", "next").chained("index", "next", 1)
+        """
+        if self.table_class is None:
+            raise QuazyWrongOperation("Query is not bound to a table")
+        self.chained_opts = DBChainedFilter(id_name, next_name, self.arg(start_value))
+        return self
