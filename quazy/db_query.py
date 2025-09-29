@@ -506,7 +506,7 @@ class DBQuery(typing.Generic[T]):
             DBQuery.queries[self._hash] = self
 
     @contextmanager
-    def get_scheme(self) -> SimpleNamespace:
+    def get_scheme(self) -> SimpleNamespace | DBQueryField[T]:
         """Scheme object for query context
 
         Scheme contains
@@ -518,7 +518,7 @@ class DBQuery(typing.Generic[T]):
         yield self.scheme
 
     def arg(self, value: Any, aggregated: bool = False) -> DBSQL:
-        """Convert any value to a part of expression
+        """Convert any value to a part of the expression
 
         Arguments:
             value: any value to convert
@@ -664,12 +664,22 @@ class DBQuery(typing.Generic[T]):
 
         Note:
             This method prevents fetching `DBTable` instances to avoid collision with specific fields.
+            Use `select_objects` instead.
 
         Returns:
             `DBQuery` for chain calls
         """
         self.fetch_objects = False
         self.fields['*'] = DBSQL(self, '*')
+        return self
+
+    def select_objects(self) -> DBQuery[T]:
+        """Select all fields specified for this query.
+
+        Returns:
+            `DBQuery` for chain calls
+        """
+        self._check_fields()
         return self
 
     def distinct(self) -> DBQuery[T]:
@@ -763,7 +773,7 @@ class DBQuery(typing.Generic[T]):
         """Filter applied to group fields. See below
 
         Hint:
-            This method is not necessary to call, because expression resolver detect aggregated functions calls
+            This method is not necessary to call, because expression resolver detects aggregated functions calls
             automatically.
 
         Arguments:
@@ -778,7 +788,7 @@ class DBQuery(typing.Generic[T]):
     def group_by(self, *fields: FDBSQL) -> DBQuery[T]:
         """Specify group fields for aggregated results
 
-        This is query analogue to `GROUP BY ...` statement.
+        This is a query analogue to `GROUP BY ...` statement.
 
         Arguments:
             *fields: list of field names or expressions to group
@@ -791,7 +801,7 @@ class DBQuery(typing.Generic[T]):
         return self
 
     def set_window(self, offset: int | None = None, limit: int | None = None) -> DBQuery[T]:
-        """Set query result window using SQL offset/limit features
+        """Set the query result window using SQL offset/limit features
 
         This is analogue to `SELECT a, b, c FROM table OFFSET ... LIMIT ...` statement.
         """
@@ -799,7 +809,7 @@ class DBQuery(typing.Generic[T]):
         return self
 
     def sum(self, expr: FDBSQL) -> DBSQL:
-        """Use aggregated function `sum` as a part of expression
+        """Use aggregated function `sum` as a part of the expression
 
         Example:
             .. code-block:: python
@@ -812,9 +822,9 @@ class DBQuery(typing.Generic[T]):
         return expr.aggregate('sum')
 
     def count(self, expr: FDBSQL = None) -> DBSQL:
-        """Use aggregated function `count` as a part of expression
+        """Use aggregated function `count` as a part of the expression
 
-        If no argument specified, count all result rows.
+        If no argument is specified, count all result rows.
 
         Example:
             .. code-block:: python
@@ -830,19 +840,19 @@ class DBQuery(typing.Generic[T]):
         return expr.aggregate('count')
 
     def avg(self, expr: FDBSQL) -> DBSQL:
-        """Use aggregated function `avg` (average) as a part of expression"""
+        """Use aggregated function `avg` (average) as a part of the expression"""
         self.has_aggregates = True
         expr = self.resolve(expr)
         return expr.aggregate('avg')
 
     def min(self, expr: DBSQL) -> DBSQL:
-        """Use aggregated function `min` as a part of expression"""
+        """Use aggregated function `min` as a part of the expression"""
         self.has_aggregates = True
         expr = self.resolve(expr)
         return expr.aggregate('min')
 
     def max(self, expr: DBSQL) -> DBSQL:
-        """Use aggregated function `max` as a part of expression"""
+        """Use aggregated function `max` as a part of the expression"""
         self.has_aggregates = True
         expr = self.resolve(expr)
         return expr.aggregate('max')
@@ -850,7 +860,7 @@ class DBQuery(typing.Generic[T]):
     def case(self) -> DBConditionField:
         """Make `DBConditionField` object for conditional values
 
-        This is analogue to SQL `CASE ...` statement.
+        This is an analogue to SQL `CASE ...` statement.
 
         Example:
              .. code-block:: python
@@ -877,10 +887,10 @@ class DBQuery(typing.Generic[T]):
 
     @contextmanager
     def execute(self, as_dict: bool = False):
-        """Execute query and yields database cursor to fetch one or mane result rows.
+        """Execute query and yields database cursor to fetch one or more result rows.
 
         Arguments:
-            as_dict: whether to return dict instead DBTable/SimpleNamespace
+            as_dict: whether to return dict instead of DBTable/SimpleNamespace
 
         Yields:
             database cursor
@@ -898,7 +908,7 @@ class DBQuery(typing.Generic[T]):
         return self.db.describe(self)
 
     def __iter__(self) -> Generator[T]:
-        """Execute query and iterate all over result rows
+        """Execute a query and iterate all over result rows
 
         :meta public:
         """
@@ -944,24 +954,24 @@ class DBQuery(typing.Generic[T]):
         return self.get(item)
 
     def fetchall(self, as_dict: bool = False) -> list[T | Any]:
-        """Execute query and fetch all result rows as list"""
+        """Execute a query and fetch all result rows as a list"""
         with self.execute(as_dict) as curr:
             return curr.fetchall()
 
     def fetchvalue(self) -> Any:
-        """Execute query and fetch first column value of first result row"""
+        """Execute a query and fetch first column value of first result row"""
         with self.execute() as curr:
             if (one:=curr.fetchone()) is not None:
                 return one[0]
             return None
 
     def fetchlist(self) -> list[Any]:
-        """Execute query and fetch first column of all result rows as list of values"""
+        """Execute a query and fetch the first column of all result rows as a list of values"""
         with self.execute() as curr:
             return [row[0] for row in curr.fetchall()]
 
     def exists(self) -> bool:
-        """Execute query and check whether first result row exists"""
+        """Execute a query and check whether the first result row exists"""
         return self.fetchone() is not None
 
     def fetch_aggregate(self, function: str, expr: FDBSQL = None) -> typing.Any:
@@ -1012,3 +1022,6 @@ class DBQuery(typing.Generic[T]):
         """Execute subquery to fetch aggregate function `avg` result value"""
         return self.fetch_aggregate('avg', expr)
 
+    def update(self, **values) -> DBQuery[T]:
+        """Updates the current query object with the specified values"""
+        return self.db.update_many(self, **values)

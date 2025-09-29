@@ -1,6 +1,6 @@
 """Database factory.
 
-This module represents one class `DBFactory` as a start point to any connection with database.
+This module represents one class `DBFactory` as a start point to any connection with the database.
 """
 
 from __future__ import annotations
@@ -326,7 +326,7 @@ class DBFactory:
         return all_tables
 
     def check(self, schema: str = None) -> bool:
-        """Check all tables are created in database
+        """Check all tables are created in the database
 
         :meta private:
         """
@@ -446,7 +446,7 @@ class DBFactory:
         with self.connection() as conn:
             if fields:
                 sql, values = self._trans.update(item.__class__, fields)
-                values['v1'] = getattr(item, item.DB.pk.name)
+                values['pk'] = getattr(item, item.DB.pk.name)
                 conn.execute(sql, values)
                 item._modified_fields_.clear()
 
@@ -507,9 +507,8 @@ class DBFactory:
         Yields:
             instance of DBTable/SimpleNamespace or dict
         """
-        from quazy.db_query import DBQuery
         with self.connection() as conn:
-            if isinstance(query, DBQuery):
+            if not isinstance(query, str):
                 sql = self._trans.select(query)
                 if self._debug_mode: print(sql)
                 if as_dict:
@@ -523,6 +522,23 @@ class DBFactory:
             else:
                 with conn.cursor(binary=True, row_factory=dict_row if as_dict else namedtuple_row) as curr:
                     yield curr.execute(query)
+
+    def update_many(self, query: DBQuery[T], **values):
+        """Update items in the database by a query
+
+        Arguments:
+            query: instance of DBQuery bound to a table
+            **values: dict of values to update
+        """
+        fields: list[tuple[DBField, Any]] = []
+        for name, value in values.items():
+            field = query.table_class.DB.fields[name]
+            fields.append((field, value))
+
+        with self.connection() as conn:
+            sql, values = self._trans.update(query.table_class, fields, query)
+            if self._debug_mode: print(sql)
+            conn.execute(sql, query.args | values)
 
     def describe(self, query: Union[DBQuery[T], str]) -> list[DBField]:
         """Describe query result fields information
@@ -627,7 +643,7 @@ class DBFactory:
             items: iterable of DBTable instances
             query: instance of DBQuery based on DBTable
             filter: callable lamba added to a query
-            reuse_conn: specify connection if it already created
+            reuse_conn: specify connection if it is already created
 
         Raises:
             QuazyWrongOperation: wrong arguments usage

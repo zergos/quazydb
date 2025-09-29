@@ -308,10 +308,10 @@ class Translator:
         return f'DELETE FROM {cls.table_name(table)} WHERE "{column}" = %s'
 
     @classmethod
-    def update(cls, table: type[DBTable], fields: list[tuple[DBField, Any]]) -> tuple[str, dict[str, Any]]:
+    def update(cls, table: type[DBTable], fields: list[tuple[DBField, Any]], query: DBQuery | str = None) -> tuple[str, dict[str, Any]]:
         sql_values: list[str] = []
         values: dict[str, Any] = {}
-        idx = 2
+        idx = 1
         #filtered = [f for f in fields if not f[0].many_field and not f[0].pk]
         filtered = [f for f in fields if not f[0].pk]
         for field, value in filtered:
@@ -334,7 +334,17 @@ class Translator:
             body_value = ', '.join(props)
             sets_sql += f'"{table.DB.body.column}" = "{table.DB.body.column}" || json_build_object({body_value})'
 
-        res = f'UPDATE {cls.table_name(table)} SET {sets_sql} WHERE "{table.DB.pk.column}" = %(v1)s'
+        if query is None:
+            where_sql = '"{table.DB.pk.column}" = %(pk)s'
+        elif isinstance(query, str):
+            where_sql = query
+        else:
+            filters = []
+            for filter in query.filters:
+                filters.append(cls.sql_value(filter))
+            where_sql = '\n\tAND '.join(filters) or 'TRUE'
+
+        res = f'UPDATE {cls.table_name(table)} SET {sets_sql} WHERE {where_sql}'
         return res, values
 
     @classmethod
@@ -387,6 +397,7 @@ class Translator:
                 joins.append(f'{op} {cls.table_name(join.with_table)} AS "{join_name}"' + (f'\n\tON {cls.sql_value(join.condition)}' if join.condition else ''))
             else:
                 joins.append(f'{op} {cls.subquery_name(join.with_table)}')
+
         filters = []
         group_filters = []
         for filter in query.filters:
