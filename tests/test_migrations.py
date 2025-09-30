@@ -1,6 +1,9 @@
+import os
+
 from quazy import DBFactory
 from quazy.migrations import *
 from quazy.exceptions import QuazyError
+from quazy.migrations import dump_changes
 
 if __name__ == '__main__':
     db = DBFactory.postgres(conninfo="postgresql://quazy:quazy@127.0.0.1/quazy")
@@ -47,7 +50,7 @@ if __name__ == '__main__':
 
     print("\nMigration #", 6)
     db.bind_module(f'tests.migration_{6}')
-    diff = compare_schema(db)
+    diff = compare_schema(db, [('ExtraTabel', 'ExtraTable')])
     print(diff.info())
     apply_changes(db, diff)
     db.unbind()
@@ -61,3 +64,8 @@ if __name__ == '__main__':
     except QuazyError as e:
         print(e)
 
+    try:
+        os.mkdir("migrations")
+    except FileExistsError:
+        pass
+    dump_changes(db, "public", "migrations")

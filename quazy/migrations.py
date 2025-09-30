@@ -10,12 +10,25 @@ from . import DBFactory, DBTable, DBField
 from .db_types import StrEnum, Enum, db_type_by_name
 from .exceptions import *
 
-__all__ = ["check_migrations", "activate_migrations", "get_migrations_list", "compare_schema", "apply_changes", "clear_migrations"]
+__all__ = ["Migration", "MigrationDifference", "check_migrations", "activate_migrations", "get_migrations_list", "compare_schema", "apply_changes", "clear_migrations"]
 
 _SCHEMA_ = "migrations"
 
 
 class Migration(DBTable):
+    """Inner table to store migrations
+
+    Attributes:
+        created_at: datetime - when migration was created
+        schema: schema name
+        index: migration index
+        next_index: next migration index or None
+        tables: json with all tables' schema
+        commands: json with all commands
+        comments: migration comments (human-readable)
+        active: is migration active
+        reversed: is migration reversed
+    """
     created_at: datetime = DBField(default_sql="now()")
     schema: str
     index: str
@@ -47,30 +60,30 @@ class MigrationType(StrEnum):
 
 class MigrationCommand(NamedTuple):
     command: MigrationType
-    subject: tuple[Any, ...]
+    arguments: tuple[Any, ...]
 
     def __str__(self):
         match self.command:
             case MigrationType.INITIAL:
                 return f"Initial migration"
             case MigrationType.ADD_TABLE:
-                return f"Add table `{self.subject[0].__qualname__}`"
+                return f"Add table `{self.arguments[0].__qualname__}`"
             case MigrationType.DELETE_TABLE:
-                return f"Delete table `{self.subject[0].__qualname__}`"
+                return f"Delete table `{self.arguments[0].__qualname__}`"
             case MigrationType.RENAME_TABLE:
-                return f"Rename table `{self.subject[1]}` to `{self.subject[2]}`"
+                return f"Rename table `{self.arguments[1]}` to `{self.arguments[2]}`"
             case MigrationType.ADD_FIELD:
-                return f"Add field `{self.subject[1].name}` to table `{self.subject[0].__qualname__}`"
+                return f"Add field `{self.arguments[1].name}` to table `{self.arguments[0].__qualname__}`"
             case MigrationType.DELETE_FIELD:
-                return f"Delete field `{self.subject[1].name}` from table `{self.subject[0].__qualname__}`"
+                return f"Delete field `{self.arguments[1].name}` from table `{self.arguments[0].__qualname__}`"
             case MigrationType.RENAME_FIELD:
-                return f"Rename field `{self.subject[1]}` to `{self.subject[2]}` at table `{self.subject[0].__qualname__}`"
+                return f"Rename field `{self.arguments[1]}` to `{self.arguments[2]}` at table `{self.arguments[0].__qualname__}`"
             case MigrationType.ALTER_FIELD_TYPE:
-                return f"Alter field type `{self.subject[1].name}` from `{self.subject[2]}` to `{self.subject[3]}` at table `{self.subject[0].__qualname__}`"
+                return f"Alter field type `{self.arguments[1].name}` from `{self.arguments[2]}` to `{self.arguments[3]}` at table `{self.arguments[0].__qualname__}`"
             case MigrationType.ALTER_FIELD_FLAG:
-                return f"Alter field `{self.subject[1].name}` flag `{self.subject[2]}` to value `{self.subject[3]}` at table `{self.subject[0].__qualname__}`"
+                return f"Alter field `{self.arguments[1].name}` flag `{self.arguments[2]}` to value `{self.arguments[3]}` at table `{self.arguments[0].__qualname__}`"
             case _:
-                return f"Custom command: `{self.command}` `{self.subject}`"
+                return f"Custom command: `{self.command}` `{self.arguments}`"
 
     def save(self) -> dict[str, typing.Any]:
 
@@ -78,8 +91,8 @@ class MigrationCommand(NamedTuple):
             args.append({'type': typ, 'value': val})
 
         args = []
-        if self.subject:
-            for arg in self.subject:
+        if self.arguments:
+            for arg in self.arguments:
                 if inspect.isclass(arg) and issubclass(arg, DBTable):
                     add_arg('DBTable', arg.__qualname__)
                 elif isinstance(arg, DBField):
@@ -92,12 +105,12 @@ class MigrationCommand(NamedTuple):
                     pass
                 else:
                     raise QuazyError('Wrong arg type in command argument')
-        return {'command': self.command, 'subject': args}
+        return {'command': self.command, 'arguments': args}
 
     @classmethod
     def load(cls, data: dict[str, typing.Any], tables: dict[str, type[DBTable]]):
         args = []
-        for arg in data['subject']:
+        for arg in data['arguments']:
             if arg['type'] == 'DBTable':
                 args.append(tables[arg['value']])
             elif arg['type'] == 'DBField':
@@ -111,11 +124,19 @@ class MigrationCommand(NamedTuple):
         return cls(command=data['command'], subject=tuple(args))
 
 class MigrationDifference(NamedTuple):
+    """Tuple of commands and tables.
+
+    Attributes:
+        commands: list of commands
+        tables: list of tables
+        migration_index: migration index when reverted or None when new migration is created
+    """
     commands: list[MigrationCommand]
     tables: list[type[DBTable]]
     migration_index: str | None = None
 
     def info(self) -> str:
+        """Get textual information about the migration difference."""
         result = ''
         if self.migration_index:
             result += f'Migration index: {self.migration_index}\n'
@@ -124,16 +145,25 @@ class MigrationDifference(NamedTuple):
         return result
 
 def check_migrations(db: DBFactory) -> bool:
+    """Check if migrations activated"""
     db.bind_module(__name__)
     return db.check(_SCHEMA_)
 
 
 def activate_migrations(db: DBFactory):
+    """Activate migrations.
+
+    This method creates table and schema for migrations.
+    """
     db.bind_module(__name__)
     db.create(_SCHEMA_)
 
 
 def clear_migrations(db: DBFactory, schema: str = None):
+    """Clear migrations for the specified schema.
+
+    If `schema` is None, then all migrations are cleared.
+    """
     db.bind_module(__name__)
     db.clear(schema or _SCHEMA_)
 
@@ -142,10 +172,22 @@ def clear_migrations(db: DBFactory, schema: str = None):
 
 
 def get_migrations_list(db: DBFactory, schema: str = 'public') -> list[Migration]:
+    """Get a list of migrations for the specified schema."""
     return db.query(Migration).filter(schema=schema).sort_by(lambda x: x.index.as_integer).fetch_all()
 
 
 def compare_schema(db: DBFactory, rename_list: list[tuple[str, str]] | None = None, migration_index: str | None = None, schema: str = "public") -> MigrationDifference:
+    """Compare the last migration with the specified schema.
+
+    Arguments:
+        db: database factory
+        rename_list: list of tuples of table/field names to rename, like ("old", "new")
+        migration_index: migration index to revert to, if `None` then the current schema is compared with the last migration
+        schema: schema name (public by default)
+
+    Returns:
+        `MigrationDifference` object with a list of commands and tables to apply to the specified schema.
+    """
     db.bind_module(__name__)
 
     commands: list[MigrationCommand] = []
@@ -293,6 +335,14 @@ def compare_schema(db: DBFactory, rename_list: list[tuple[str, str]] | None = No
 
 
 def apply_changes(db: DBFactory, diff: MigrationDifference, comments: str = "", schema: str = 'public'):
+    """Apply changes from the specified migration difference.
+
+    Arguments:
+        db: database factory
+        diff: migration difference
+        comments: optional comments for the migration (human-readable)
+        schema: schema name (public by default)
+    """
 
     if not diff.commands:
         return
@@ -319,38 +369,38 @@ def apply_changes(db: DBFactory, diff: MigrationDifference, comments: str = "", 
                 print(f"Apply command: {command}... ", end='')
                 match command.command:
                     case MigrationType.ADD_TABLE:
-                        conn.execute(trans.create_table(command.subject[0]))
-                        for field in command.subject[0].DB.fields.values():
+                        conn.execute(trans.create_table(command.arguments[0]))
+                        for field in command.arguments[0].DB.fields.values():
                             if field.ref:
-                                conn.execute(trans.add_reference(command.subject[0], field))
+                                conn.execute(trans.add_reference(command.arguments[0], field))
 
                     case MigrationType.DELETE_TABLE:
-                        for field in command.subject[0].DB.fields.values():
+                        for field in command.arguments[0].DB.fields.values():
                             if field.ref:
-                                conn.execute(trans.drop_reference(command.subject[0], field))
-                        conn.execute(trans.drop_table(command.subject[0]))
+                                conn.execute(trans.drop_reference(command.arguments[0], field))
+                        conn.execute(trans.drop_table(command.arguments[0]))
 
                     case MigrationType.RENAME_TABLE:
-                        conn.execute(trans.rename_table(*command.subject))
+                        conn.execute(trans.rename_table(*command.arguments))
 
                     case MigrationType.ADD_FIELD:
-                        conn.execute(trans.add_field(*command.subject))
-                        if command.subject[1].ref:
-                            conn.execute(trans.add_reference(*command.subject))
+                        conn.execute(trans.add_field(*command.arguments))
+                        if command.arguments[1].ref:
+                            conn.execute(trans.add_reference(*command.arguments))
 
                     case MigrationType.DELETE_FIELD:
-                        if command.subject[1].ref:
-                            conn.execute(trans.drop_reference(*command.subject))
-                        conn.execute(trans.drop_field(*command.subject))
+                        if command.arguments[1].ref:
+                            conn.execute(trans.drop_reference(*command.arguments))
+                        conn.execute(trans.drop_field(*command.arguments))
 
                     case MigrationType.RENAME_FIELD:
-                        conn.execute(trans.rename_field(*command.subject))
+                        conn.execute(trans.rename_field(*command.arguments))
 
                     case MigrationType.ALTER_FIELD_TYPE:
-                        conn.execute(trans.alter_field_type(command.subject[0], command.subject[1]))
+                        conn.execute(trans.alter_field_type(command.arguments[0], command.arguments[1]))
 
                     case MigrationType.ALTER_FIELD_FLAG:
-                        table, field, flag, value = command.subject
+                        table, field, flag, value = command.arguments
                         match flag:
                             case 'pk':
                                 raise QuazyNotSupported
@@ -419,16 +469,18 @@ def apply_changes(db: DBFactory, diff: MigrationDifference, comments: str = "", 
 
 
 def dump_changes(db: DBFactory, schema: str, directory: str):
+    """Dump changes for the specified schema to the specified directory in YAML format."""
+
     import yaml
 
-    migrations = db.query(Migration).filter(schema=schema)
+    migrations = db.query(Migration).chained("index", "next_index", "0001").filter(schema=schema)
 
     for migration in migrations:
         info = '-' + migration.comments[0:32].replace(' ', '-') if migration.comments else ''
-        with open(os.path.join(directory, f'{migration.index:04}{info}.yaml'), "wt") as f:
+        with open(os.path.join(directory, f'{migration.index}{info}.yaml'), "wt") as f:
             yaml.dump({
                 "comments": migration.comments,
                 "commands": json.loads(migration.commands),
                 "tables": json.loads(migration.tables),
-            }, f)
+            }, f, sort_keys=False)
 

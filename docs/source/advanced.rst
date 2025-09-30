@@ -152,7 +152,7 @@ It is also possible specify "reverse" field name explicitly.
     Task(title="Task 3", sender=j, receiver=b).save()
 
     q = User.select("name", task=lambda x: x.tasks_received.title).where(name="John")
-    print(q.fetchall(as_dict=True))
+    print(q.fetch_all(as_dict=True))
 
     u = User.get(name="John").load("tasks_received")
     for t in u.tasks_received:
@@ -187,7 +187,7 @@ Many-to-many relations
     s3.books.append(b2)
     s3.save()
     q = Book.select(seller="sellers.name").filter(name="Alice in wonderland")
-    print(q.fetchlist())
+    print(q.fetch_list())
 
 Substitute tables
 =================
@@ -211,7 +211,7 @@ Substitute tables
 
     q = Receipt.Item.select("name", "total").filter(receipt=r)
     print("Total sum:", q.fetch_sum("total"))
-    print("Items:", ", ".join(q.fetchlist()))
+    print("Items:", ", ".join(q.fetch_list()))
 
 Meta tables
 ===========
@@ -291,8 +291,8 @@ In the example below only one table created in database, named `catalog`.
     Supplier(number=99, name="Golden nuts").save()
     Customer(number=56, name="Hungry mouse").save()
 
-    print(Supplier.select("name").fetchlist())
-    print(Customer.select("name").fetchlist())
+    print(Supplier.select("name").fetch_list())
+    print(Customer.select("name").fetch_list())
 
 
 Lightweight JSON properties
@@ -356,7 +356,7 @@ There is an example of generated stub:
 
     class Task(DBTable):
         title: str
-        sender: User = DBField(reverse_name="tasks_send")
+        sender: User = DBField(reverse_name="tasks_sent")
         receiver: User = DBField(reverse_name="tasks_received")
 
         class History(DBTable):
@@ -369,7 +369,7 @@ There is an example of generated stub:
     class User(DBTable):
         name: str
         id: int
-        tasks_send: list["Task"]
+        tasks_sent: list["Task"]
         tasks_received: list["Task"]
         def __init__(self, name: str = None, id: int = None, tasks_send: list["Task"] = None, tasks_received: list["Task"] = None): ...
 
@@ -388,4 +388,78 @@ There is an example of generated stub:
             id: int
             task: "Task"
             def __init__(self, record_date: datetime = None, description: str = None, id: int = None, task: "Task" = None): ...
+
+
+Migrations
+==========
+
+Migration means put any modifications to the database schema. Quazy can analyze your object models and keep
+data schema updated.
+
+It is allowed to apply and revert any modification, moving via modifications tree.
+
+There is additional table named `migration` created in schema `migrations` in the database when activated.
+Each row contains migration index, schema tables snapshot and necessary commands list to perform changes
+in the database.
+
+Migrations module
+-----------------
+
+..  automodule:: quazy.migrations
+    :members:
+
+Example
+-------
+
+..  code-block:: python
+    :caption: Initial migration
+
+    class SomeTable(DBTable):
+        name: str
+
+    db = DBFactory.postgres(conninfo="postgresql://quazy:quazy@127.0.0.1/quazy")
+
+    db.bind_module()
+    db.clear()
+    db.create()
+
+    activate_migrations(db)
+    diff = compare_schema(db)
+    print("Initial:")
+    print(diff.info())
+    apply_changes(db, diff)
+
+
+..  code-block:: python
+    :caption: Any new migration
+
+    class SomeTable(DBTable):
+        name: str
+        value: int
+
+    diff = compare_schema(db)
+    print(diff.info())
+    apply_changes(db, diff)
+
+..  code-block:: python
+    :caption: Revert migration
+
+    diff = compare_schema(db, migration_index="0001")
+    print(diff.info())
+    apply_changes(db, diff)
+
+..  code-block:: python
+    :caption: Rename table or field
+
+    class AwesomeTable(DBTable):
+        name: str
+        integer_value: int
+
+    diff = compare_schema(db, [("SomeTable", "AwesomeTable"), ("value", "integer_value")])
+    print(diff.info())
+    apply_changes(db, diff)
+
+..  warning::
+
+    Use renaming for refactoring and misspells correction to avoid deletion and possible data lost.
 
