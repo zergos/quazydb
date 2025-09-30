@@ -10,54 +10,29 @@ from . import DBFactory, DBTable, DBField
 from .db_types import StrEnum, Enum, db_type_by_name
 from .exceptions import *
 
-__all__ = ["check_migrations", "activate_migrations", "get_migrations", "get_changes", "apply_changes", "clear_migrations"]
+__all__ = ["check_migrations", "activate_migrations", "get_migrations_list", "compare_schema", "apply_changes", "clear_migrations"]
 
 _SCHEMA_ = "migrations"
-
-
-class MigrationVersion(DBTable):
-    schema: str
-    index: int
 
 
 class Migration(DBTable):
     created_at: datetime = DBField(default_sql="now()")
     schema: str
-    index: int
+    index: str
+    next_index: str | None
     tables: str
     commands: str
     comments: str
-    detached: bool = False
+    active: bool = True
+    reversed: bool = False
 
-
-def check_migrations(db: DBFactory) -> bool:
-    db.use_module(__name__)
-    return db.check(_SCHEMA_)
-
-
-def activate_migrations(db: DBFactory):
-    db.use_module(__name__)
-    db.create(_SCHEMA_)
-
-
-def clear_migrations(db: DBFactory, schema: str = None):
-    db.use_module(__name__)
-    db.clear(schema or _SCHEMA_)
-
-    if schema:
-        db.delete(Migration, filter=lambda x: x.schema == schema)
-
-
-def get_migrations(db: DBFactory, schema: str) -> list[tuple[bool, int, datetime, str]]:
-    current = db.query(MigrationVersion).filter(schema=schema).select("index").fetchvalue()
-    current_index = current if current is not None else -1
-
-    res = []
-    for row in db.query(Migration).filter(schema=schema).select("index", "created_at", "comments"):
-        res.append((row.index == current_index, row.index, row.created_at, row.comments))
-
-    return res
-
+    def __str__(self):
+        return '{} {:4s}{} {}'.format(
+            '*' if self.active else '-' if self.reversed else ' ',
+            self.index,
+            f'->{self.next_index}' if self.next_index is not None else '      ',
+            self.comments
+        )
 
 class MigrationType(StrEnum):
     INITIAL = auto()
@@ -69,7 +44,6 @@ class MigrationType(StrEnum):
     RENAME_FIELD = auto()
     ALTER_FIELD_TYPE = auto()
     ALTER_FIELD_FLAG = auto()
-
 
 class MigrationCommand(NamedTuple):
     command: MigrationType
@@ -136,8 +110,42 @@ class MigrationCommand(NamedTuple):
                 raise QuazyError('Wrong arg type in command loading')
         return cls(command=data['command'], subject=tuple(args))
 
+class MigrationDifference(NamedTuple):
+    commands: list[MigrationCommand]
+    tables: list[type[DBTable]]
+    migration_index: str | None = None
 
-def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] | None = None) -> tuple[list[MigrationCommand], list[type[DBTable]]]:
+    def info(self) -> str:
+        result = ''
+        if self.migration_index:
+            result += f'Migration index: {self.migration_index}\n'
+        result += 'Commands:\n'
+        result += '\n'.join(str(command) for command in self.commands)
+        return result
+
+def check_migrations(db: DBFactory) -> bool:
+    db.use_module(__name__)
+    return db.check(_SCHEMA_)
+
+
+def activate_migrations(db: DBFactory):
+    db.use_module(__name__)
+    db.create(_SCHEMA_)
+
+
+def clear_migrations(db: DBFactory, schema: str = None):
+    db.use_module(__name__)
+    db.clear(schema or _SCHEMA_)
+
+    if schema:
+        db.delete(Migration, filter=lambda x: x.schema == schema)
+
+
+def get_migrations_list(db: DBFactory, schema: str = 'public') -> list[Migration]:
+    return db.query(Migration).filter(schema=schema).sort_by(lambda x: x.index.as_integer()).fetchall()
+
+
+def compare_schema(db: DBFactory, rename_list: list[tuple[str, str]] | None = None, migration_index: str | None = None, schema: str = "public") -> MigrationDifference:
     db.use_module(__name__)
 
     commands: list[MigrationCommand] = []
@@ -145,28 +153,41 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
     # check last migration
     last_migration = db.query(Migration)\
         .select('index', 'tables')\
-        .filter(schema=schema)\
-        .sort_by('index', desc=True)\
+        .filter(schema=schema, active=True)\
         .fetchone()
 
     if not last_migration:
-        return [MigrationCommand(MigrationType.INITIAL, (None, ))], db.all_tables(schema)
+        return MigrationDifference([MigrationCommand(MigrationType.INITIAL, (None, ))], db.all_tables(schema))
+
+    if migration_index == last_migration.index:
+        raise QuazyError(f'Migration index `{migration_index}` already applied')
+
+    def load_tables(tables_data: str) -> dict[str, type[DBTable]]:
+        tables: dict[str, type[DBTable]] = {}
+        data = json.loads(tables_data)
+        for chunk in data:
+            SomeTable: type[DBTable] = DBTable._load_schema(chunk)
+            tables |= {SomeTable.__qualname__: SomeTable}
+
+        globalns = tables.copy()
+        for t in list(tables.values()):
+            t.resolve_types(globalns)
+        for t in list(tables.values()):
+            t.resolve_types_many(lambda _: None)
+        return tables
 
     # load last schema
-    tables_old: dict[str, type[DBTable]] = {}
-    data = json.loads(last_migration.tables)
-    for chunk in data:
-        SomeTable: type[DBTable] = DBTable._load_schema(chunk)
-        tables_old |= {SomeTable.__qualname__: SomeTable}
+    tables_old = load_tables(last_migration.tables)
 
-    globalns = tables_old.copy()
-    for t in list(tables_old.values()):
-        t.resolve_types(globalns)
-    for t in list(tables_old.values()):
-        t.resolve_types_many(lambda _: None)
-
-    # get tables from specified module
-    all_tables = db.all_tables(schema)
+    if migration_index is None:
+        # get tables from the specified module
+        all_tables = db.all_tables(schema)
+    else:
+        # get tables from the specified migration snapshot
+        selected_migration = db.query(Migration).select("tables").where(index=migration_index).fetchone()
+        if not selected_migration:
+            raise QuazyError(f'No migration index `{migration_index}` found')
+        all_tables = list(load_tables(selected_migration.tables).values())
 
     # extend by related types from other schemas
     for t in all_tables.copy():
@@ -198,11 +219,12 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
 
     # 3. Check to rename
     tables_to_rename = []
-    for pair in rename_list:
-        if pair[0] in tables_to_delete and pair[1] in tables_to_add:
-            tables_to_rename.append((tables_to_delete[pair[0]].DB.schema, tables_to_delete[pair[0]].DB.table, tables_to_add[pair[1]].DB.table))
-            del tables_to_delete[pair[0]]
-            del tables_to_add[pair[1]]
+    if rename_list:
+        for pair in rename_list:
+            if pair[0] in tables_to_delete and pair[1] in tables_to_add:
+                tables_to_rename.append((tables_to_delete[pair[0]].DB.schema, tables_to_delete[pair[0]].DB.table, tables_to_add[pair[1]].DB.table))
+                del tables_to_delete[pair[0]]
+                del tables_to_add[pair[1]]
 
     # Generate commands
     for name, t in tables_to_add.items():
@@ -230,11 +252,12 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
 
         # 4.3. Check for renamed fields
         fields_to_rename = []
-        for pair in rename_list:
-            if pair[0] in fields_to_delete and pair[1] in tables_to_add:
-                fields_to_rename.append(pair)
-                del fields_to_delete[pair[0]]
-                del fields_to_add[pair[1]]
+        if rename_list:
+            for pair in rename_list:
+                if pair[0] in fields_to_delete and pair[1] in fields_to_add:
+                    fields_to_rename.append(pair)
+                    del fields_to_delete[pair[0]]
+                    del fields_to_add[pair[1]]
 
         # Generate commands
         for f in fields_to_add.values():
@@ -254,7 +277,7 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
                 field_new.type = db_type_by_name(field_new.type.__base__.__name__)
 
             # 4.4.1. Check flag changed
-            for flag_name in ('pk','cid','prop','required','indexed','unique','default_sql'):
+            for flag_name in ('pk','cid','property','required','indexed','unique','default_sql'):
                 if getattr(field_old, flag_name) != getattr(field_new, flag_name):
                     commands.append(MigrationCommand(MigrationType.ALTER_FIELD_FLAG, (table_new, field_new, flag_name, getattr(field_new, flag_name))))
 
@@ -262,37 +285,34 @@ def get_changes(db: DBFactory, schema: str, rename_list: list[tuple[str, str]] |
             if field_old.type.__name__ != field_new.type.__name__:
                 commands.append(MigrationCommand(MigrationType.ALTER_FIELD_TYPE, (table_new, field_new, field_old.type.__name__, field_new.type.__name__)))
 
-    return commands, db.all_tables(schema)
+    return MigrationDifference(commands, db.all_tables(schema), migration_index)
 
 
-def apply_changes(db: DBFactory, schema: str, commands: list[MigrationCommand], all_tables: list[type[DBTable]], comments: str = "", debug: bool = False):
+def apply_changes(db: DBFactory, diff: MigrationDifference, comments: str = "", schema: str = 'public'):
 
-    if not commands:
+    if not diff.commands:
         return
 
-    def save_migration(index: int):
-        saved_tables = [t._dump_schema() for t in all_tables]
+    def save_migration(index: str):
+        saved_tables = [t._dump_schema() for t in diff.tables]
         json_tables = json.dumps(saved_tables, indent=4)
-        saved_commands = [c.save() for c in commands]
+        saved_commands = [c.save() for c in diff.commands]
         json_commands = json.dumps(saved_commands, indent=4)
         migration = Migration(schema=schema, index=index, tables=json_tables, commands=json_commands, comments=comments)
         db.insert(migration)
 
-        version = MigrationVersion(schema=schema, index=index)
-        db.save(version, 'schema')
-
-    if len(commands) == 1 and commands[0].command == MigrationType.INITIAL:
+    if len(diff.commands) == 1 and diff.commands[0].command == MigrationType.INITIAL:
         print("Apply initial migration... ", end='')
         db.create(schema)
-        save_migration(1)
+        save_migration('0001')
         print('Done')
         return
 
     trans = db._trans
     with db.connection() as conn:
         with conn.transaction():
-            for command in commands:
-                print(f"Apply command {command}... ", end='')
+            for command in diff.commands:
+                print(f"Apply command: {command}... ", end='')
                 match command.command:
                     case MigrationType.ADD_TABLE:
                         conn.execute(trans.create_table(command.subject[0]))
@@ -357,8 +377,39 @@ def apply_changes(db: DBFactory, schema: str, commands: list[MigrationCommand], 
                                 conn.execute(trans.set_default_value(table, field, value))
                 print("Done")
 
-            max_index = db.query(Migration).filter(lambda x: x.schema == schema).fetch_max('index')
-            save_migration(max_index+1)
+            # set migration statuses
+            last_mig = db.get(Migration, active=True)
+            if diff.migration_index is None:
+                max_index = db.query(Migration).filter(lambda x: x.schema == schema).fetch_max(lambda x: x.index.as_integer())
+                next_index = f'{max_index+1:04d}'
+                save_migration(next_index)
+                if last_mig:
+                    last_mig.active = False
+                    last_mig.next_index = next_index
+                    last_mig.save()
+            else:
+                if int(diff.migration_index) < int(last_mig.index):
+                    q = db.query(Migration).chained("index", "next_index", diff.migration_index)
+                    for x in q:
+                        if x.index > diff.migration_index:
+                            x.active = False
+                            x.reversed = True
+                        else:
+                            x.active = True
+                        x.save()
+                        if x.index == last_mig.index:
+                            break
+                else:
+                    q = db.query(Migration).chained("index", "next_index", last_mig.index)
+                    for x in q:
+                        x.reversed = False
+                        if x.index == diff.migration_index:
+                            x.active = True
+                            x.save()
+                            break
+                        else:
+                            x.active = False
+                        x.save()
 
             print("Complete")
 
@@ -366,7 +417,7 @@ def apply_changes(db: DBFactory, schema: str, commands: list[MigrationCommand], 
 def dump_changes(db: DBFactory, schema: str, directory: str):
     import yaml
 
-    migrations: typing.Iterator[Migration] = db.query(Migration).filter(schema=schema)
+    migrations = db.query(Migration).filter(schema=schema)
 
     for migration in migrations:
         info = '-' + migration.comments[0:32].replace(' ', '-') if migration.comments else ''

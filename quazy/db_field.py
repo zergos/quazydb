@@ -42,15 +42,17 @@ class DBField:
     required: bool = data_field(default=True, init=False)
     indexed: bool = False
     unique: bool = False
-    default: Union[Any, Callable[[DBTable], Any]] = None
+    default: Union[Any, Callable[[DBTable], Any]] = object
     default_sql: str = None
     reverse_name: str = None
     # many_field: bool = data_field(default=False, init=False)
     ux: Optional[UX] = None
 
     def __post_init__(self):
-        if self.default is not None or self.default_sql is not None:
+        if self.default is not object or self.default_sql is not None:
             self.required = False
+
+
 
     def prepare(self, name: str):
         self.name = name
@@ -72,7 +74,7 @@ class DBField:
             'type': db_type_name(self.type) if not self.ref else self.type.__qualname__,
         }
 
-        for col in 'pk cid ref body prop required indexed unique'.split():
+        for col in 'pk cid ref body property required indexed unique'.split():
             if val := getattr(self, col):
                 res[col] = val
         if val := self.default_sql:

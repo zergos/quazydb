@@ -145,6 +145,10 @@ class DBFactory:
         for table in tables:
             table.resolve_types_many(lambda t: self.use(t, schema))
 
+    def unbind(self):
+        """Unbind all tables"""
+        self._tables.clear()
+
     def __contains__(self, item: str | DBTable) -> bool:
         """Check if DBTable exists in database factory"""
         if isinstance(item, str):
@@ -385,7 +389,7 @@ class DBFactory:
                 fields.append((field, item.DB.discriminator))
             elif field.body:
                 continue
-            elif field.required and not field.pk and not field.default and not field.default_sql:
+            elif field.required and not field.pk and field.default is object and not field.default_sql:
                 value = getattr(item, name, None)
                 if value is None:
                     raise QuazyMissedField(f"Field `{name}` value is missed for `{item.__class__.__name__}`")

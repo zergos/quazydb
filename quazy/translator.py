@@ -248,7 +248,7 @@ class Translator:
                 if field.pk:
                     sql_values.append('DEFAULT')
                 elif value is DefaultValue:
-                    if field.default is None:
+                    if field.default is object:
                         sql_values.append('DEFAULT')
                     else:
                         sql_values.append(f'%(v{idx})s')

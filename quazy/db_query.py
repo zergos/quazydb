@@ -24,7 +24,7 @@ __all__ = ['DBQuery', 'DBScheme', 'DBQueryField']
 def is_expression_canonical(expr: str) -> bool:
     return is_expression_canonical.r.fullmatch(expr) is not None
 
-is_expression_canonical.r = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*([.][a-zA-Z_][a-zA-Z0-9_]*)*$")
+is_expression_canonical.r = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]+([.][a-zA-Z_][a-zA-Z0-9_]+)+$")
 
 class DBQueryField(typing.Generic[T]):
     def __init__(self, query: DBQuery, table: type[T], path: str = None, field: DBField = None):
@@ -321,10 +321,12 @@ class DBSQL:
     def __str__(self):
         return self.sql_text
 
-    def __int__(self) -> DBSQL:
-        return self.cast('int')
+    #def __int__(self) -> DBSQL:
+    def as_integer(self) -> DBSQL:
+        return self.cast('integer')
 
-    def __float__(self) -> DBSQL:
+    #def __float__(self) -> DBSQL:
+    def as_float(self) -> DBSQL:
         return self.cast('double precision')
 
     #def __bool__(self) -> DBSQL:
