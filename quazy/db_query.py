@@ -21,7 +21,14 @@ if typing.TYPE_CHECKING:
 
 __all__ = ['DBQuery', 'DBScheme', 'DBQueryField']
 
+def is_expression_id(expr: str) -> str:
+    # check expression is field "name"
+    return is_expression_id.r.fullmatch(expr) is not None
+
+is_expression_id.r = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]+")
+
 def is_expression_canonical(expr: str) -> bool:
+    # check expression is "some.field.name"
     return is_expression_canonical.r.fullmatch(expr) is not None
 
 is_expression_canonical.r = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]+([.][a-zA-Z_][a-zA-Z0-9_]+)+$")
@@ -315,6 +322,7 @@ class DBSQL:
     def __le__(self, other) -> DBSQL:
         return self.op('<=', other)
 
+    @property
     def as_string(self) -> DBSQL:
         return self.cast('text')
 
@@ -322,10 +330,12 @@ class DBSQL:
         return self.sql_text
 
     #def __int__(self) -> DBSQL:
+    @property
     def as_integer(self) -> DBSQL:
         return self.cast('integer')
 
     #def __float__(self) -> DBSQL:
+    @property
     def as_float(self) -> DBSQL:
         return self.cast('double precision')
 
@@ -566,7 +576,7 @@ class DBQuery(typing.Generic[T]):
                 q.filter(lambda x: x.angles == q.var('angles'))
                 for angle in range(3, 7):
                     q['angle'] = angle
-                    print(q.fetchone())
+                    print(q.fetch_one())
         """
         self.args[key] = value
         return DBSQL(self, f'%({key})')
@@ -587,17 +597,21 @@ class DBQuery(typing.Generic[T]):
 
         :meta private:
         """
+        if not scheme:
+            scheme = self.scheme
         if callable(expr):
-            return expr(self.scheme)
+            return expr(scheme)
         if isinstance(expr, DBSQL):
             return expr
         if isinstance(expr, str):
             if not expr:
                 raise QuazyFieldTypeError('Expression is empty string')
             if not is_expression_canonical(expr):
+                if self.table_class is not None and expr in self.table_class.DB.fields:
+                    return getattr(scheme, expr)
                 return DBSQL(self, expr)
             chunks = expr.split('.')
-            sub_scheme = getattr(scheme or self.scheme, chunks[0])
+            sub_scheme = getattr(scheme, chunks[0])
             if len(chunks) == 1:
                 return sub_scheme
             return self.resolve(expr[expr.index('.') + 1:], sub_scheme)
@@ -610,7 +624,7 @@ class DBQuery(typing.Generic[T]):
                 raise QuazyFieldTypeError('Table is not bound to a query')
             if self.table_class != expr:
                 raise QuazyFieldTypeError(f'Can not filter table `{self.table_class.__qualname__}` by the instance of `{expr.__class__.__qualname__}`')
-            return self.scheme.pk == expr
+            return scheme.pk == expr
         raise QuazyFieldTypeError('Expression type not supported')
 
     def with_query(self, subquery: DBQuery, not_materialized: bool = False) -> DBSubqueryField:
@@ -922,7 +936,7 @@ class DBQuery(typing.Generic[T]):
         with self.execute() as curr:
             yield from curr
 
-    def fetchone(self, as_dict: bool = False) -> T | Any:
+    def fetch_one(self, as_dict: bool = False) -> T | Any:
         """Execute query and fetch first result row"""
         with self.execute(as_dict) as curr:
             return curr.fetchone()
@@ -933,7 +947,7 @@ class DBQuery(typing.Generic[T]):
             raise QuazyWrongOperation("`get` possible for objects query")
         self.filters.clear()
         self.filters.append(self.scheme.pk == pk_id)  # type: ignore
-        return self.fetchone()
+        return self.fetch_one()
 
     @classmethod
     def any(cls, expr_list: typing.Iterator[DBSQL]) -> DBSQL:
@@ -960,22 +974,30 @@ class DBQuery(typing.Generic[T]):
         """Short form to get item by primary key identifier"""
         return self.get(item)
 
-    def fetchall(self, as_dict: bool = False) -> list[T | Any]:
+    def fetch_all(self, as_dict: bool = False) -> list[T | Any]:
         """Execute a query and fetch all result rows as a list"""
         with self.execute(as_dict) as curr:
             return curr.fetchall()
 
-    def fetchvalue(self) -> Any:
+    def fetch_value(self) -> Any:
         """Execute a query and fetch first column value of first result row"""
         with self.execute() as curr:
             if (one:=curr.fetchone()) is not None:
                 return one[0]
             return None
 
-    def fetchlist(self) -> list[Any]:
-        """Execute a query and fetch the first column of all result rows as a list of values"""
+    def fetch_list(self, index: int | str = 0) -> list[Any]:
+        """Execute a query and fetch the first column of all result rows as a list of values
+
+        Arguments:
+            index: column index or name
+        """
         with self.execute() as curr:
-            return [row[0] for row in curr.fetchall()]
+            rows = curr.fetchall()
+            if type(index) is int:
+                return [row[index] for row in rows]
+            else:
+                return [getattr(row, index) for row in rows]
 
     def exists(self) -> bool:
         """Execute a query and check whether the first result row exists"""
@@ -1003,7 +1025,7 @@ class DBQuery(typing.Generic[T]):
         obj.fields.clear()
         obj.fetch_objects = False
         obj.select(result=obj.resolve(expr).aggregate(function))
-        return obj.fetchone().result
+        return obj.fetch_one().result
 
     def fetch_count(self, expr: FDBSQL = None):
         """Execute subquery to fetch aggregate function `count` result value"""
@@ -1011,7 +1033,7 @@ class DBQuery(typing.Generic[T]):
         obj.fields.clear()
         obj.fetch_objects = False
         obj.select(result=obj.count(expr))
-        return obj.fetchone().result
+        return obj.fetch_one().result
 
     def fetch_sum(self, expr: FDBSQL) -> typing.Any:
         """Execute subquery to fetch aggregate function `sum` result value"""
@@ -1049,9 +1071,16 @@ class DBQuery(typing.Generic[T]):
                     next: int
                     name: str
 
-                q = Chained.select("name", "next").chained("index", "next", 1)
+                q = Chained.chained("index", "next", 1)
+                print(q.fetch_all())
         """
         if self.table_class is None:
             raise QuazyWrongOperation("Query is not bound to a table")
+        if id_name not in self.table_class.DB.fields:
+            raise QuazyFieldNameError(f'Field `{id_name}` is not defined in table `{self.table_class.__qualname__}`')
+        if next_name not in self.table_class.DB.fields:
+            raise QuazyFieldNameError(f'Field `{next_name}` is not defined in table `{self.table_class.__qualname__}`')
+        if not self.fetch_objects:
+            self.select(id_name, next_name) # at least `next_name` field must be selected
         self.chained_opts = DBChainedFilter(id_name, next_name, self.arg(start_value))
         return self

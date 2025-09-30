@@ -23,7 +23,7 @@ class Product(DBTable):
 if __name__ == "__main__":
     db = DBFactory.postgres(conninfo="postgresql://quazy:quazy@127.0.0.1/quazy")
     db._debug_mode = True
-    db.use_module()
+    db.bind_module()
 
     db.clear()
     db.create()

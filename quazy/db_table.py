@@ -525,14 +525,14 @@ class DBTable(metaclass=MetaTable):
         for field_name, table in self.DB.subtables.items():
             if selected_field_name is None or selected_field_name == field_name:
                 q = self._db_.query(table).filter(lambda x: getattr(x, table.DB.owner.DB.table) == self)
-                setattr(self, field_name, q.fetchall())
+                setattr(self, field_name, q.fetch_all())
                 if selected_field_name is not None:
                     return self
 
         for field_name, many_field in self.DB.many_fields.items():
             if selected_field_name is None or selected_field_name == field_name:
                 q = self._db_.query(many_field.foreign_table).filter(lambda x: getattr(x, many_field.foreign_field) == self)
-                setattr(self, field_name, q.fetchall())
+                setattr(self, field_name, q.fetch_all())
                 if selected_field_name is not None:
                     return self
 
@@ -540,7 +540,7 @@ class DBTable(metaclass=MetaTable):
             if selected_field_name is None or many_to_many_field == selected_field_name:
                 q = self._db_.query(many_to_many_field.foreign_table).filter(
                     lambda x: getattr(x, many_to_many_field.foreign_field).pk == self)
-                setattr(self, field_name, q.fetchall())
+                setattr(self, field_name, q.fetch_all())
                 if selected_field_name is not None:
                     return self
 

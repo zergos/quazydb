@@ -229,7 +229,7 @@ class Translator:
         from .db_table import DBTable
         if field.type is dict:
             return json.dumps(value)
-        if field.ref and isinstance(value, DBTable):
+        if field.ref and (isinstance(value, DBTable) or isinstance(value, DBTable.ItemGetter)):
             return getattr(value, field.type.DB.pk.name)
         if issubclass(field.type, IntEnum):
             return value.value

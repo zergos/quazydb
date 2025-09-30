@@ -125,7 +125,7 @@ if __name__ == '__main__':
 
     db = DBFactory.postgres(conninfo="postgresql://quazy:quazy@127.0.0.1/quazy")
     db._debug_mode = True
-    db.use_module()
+    db.bind_module()
 
     #import jsonpickle
     #print(jsonpickle.encode(db._tables))
@@ -187,14 +187,14 @@ if __name__ == '__main__':
     with db.query() as q2:
         sub = q2.with_query(q)
         q2.select(total_max=q2.max(sub.date_sum))
-    max_sum = q2.fetchone().total_max
+    max_sum = q2.fetch_one().total_max
     print(max_sum)
 
     pot = db.get(Item, name='New potato')
     print(pot)
 
     #print(db.query(novoross.fact_clients).select(name=lambda s: s.name).fetchone())
-    print(db.query(Client).filter(fact_city=novoross).select(name=lambda s: s.name).fetchone())
+    print(db.query(Client).filter(fact_city=novoross).select(name=lambda s: s.name).fetch_one())
 
     user = User(name="zergos", apps=list(App(name=f'app{i+1}') for i in range(10)))
     db.insert(user)
@@ -204,12 +204,12 @@ if __name__ == '__main__':
     for i in range(10):
         db.insert(GroupCatalog(name=f'Group{i+1}'))
 
-    print(db.query(GroupCatalog).select('name').fetchlist())
+    print(db.query(GroupCatalog).select('name').fetch_list())
 
     g = db.insert(GroupCatalog(name="Life"))
     j = db.insert(Journal(name="Racoon", title="Racoons life ep. 1", price=1.99, group=g, pub_date=datetime.utcnow(), cc=Journal.ContentClass.HIGHLIGHTS))
 
-    j_out = db.query(Journal).fetchone()
+    j_out = db.query(Journal).fetch_one()
     print(j_out.inspect())
 
     print(j_out.group.random_id)
@@ -232,6 +232,6 @@ if __name__ == '__main__':
     for f in fields:
         print(f'{f.name} - {f.type.__name__}')
 
-    print(query.fetchall())
+    print(query.fetch_all())
 
     print('Done')

@@ -137,7 +137,7 @@ Select fields by names or calculate by `lambdas`:
 
     query = db.query(Item).select("name", "base_unit", unit=lambda x: x.base_unit.name)
 
-    print(query.fetchall())
+    print(query.fetch_all())
 
 Filter by lambdas:
 
@@ -182,7 +182,7 @@ Reuse initial query for additional results for easy
     with db.query() as q2:
         sub = q2.with_query(q)
         q2.select(total_max=q2.max(sub.date_sum))
-    max_sum = q2.fetchone().total_max
+    max_sum = q2.fetch_one().total_max
 
 Queries result types
 --------------------
@@ -205,9 +205,9 @@ Do you have growing database? No problem, flexible migrations bundled.
 ..  code-block::
 
     db = DBFactory.postgres(conninfo="postgresql://quazy:quazy@localhost/quazy")
-    db.use_module()
-    commands, new_tables = get_changes(db, 'public')
-    apply_changes(db, 'public', commands, new_tables, 'my new migration')
+    db.bind_module()
+    diff = compare_schema(db)
+    apply_changes(db, diff, 'my new migration')
 
 
 IDE friendly

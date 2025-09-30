@@ -46,7 +46,7 @@ class DBFactory:
 
             db = DBFactory.postgres(conninfo="postgresql://quazy:quazy@localhost/quazy")
             db._debug_mode = True
-            db.use_module()
+            db.bind_module()
             db.clear()
             db.create()
             ...
@@ -97,12 +97,12 @@ class DBFactory:
             return None
         return DBFactory(pool, debug_mode)
 
-    def use(self, cls: type[DBTable], schema: str = 'public'):
-        """Use a specific table with the factory instance
+    def bind(self, cls: type[DBTable], schema: str = 'public'):
+        """Bind a specific table to the factory instance
 
         Args:
-            cls: Table to use
-            schema: schema name to use
+            cls: Table to bind
+            schema: schema name
         """
         cls.DB.db = self
         if not cls.DB.schema:
@@ -118,11 +118,11 @@ class DBFactory:
         setattr(self, cls.__name__, cls)
         return cls
 
-    def use_module(self, name: str = None, schema: str = 'public'):
-        """Use a specific module by name with a factory instance
+    def bind_module(self, name: str = None, schema: str = 'public'):
+        """Bind a specific module by name to the database factory
 
         Args:
-            name: module name to use. If not specified, uses current module
+            name: module name to bind. If not specified, bind current module
             schema: schema name to use
         """
         if name:
@@ -139,18 +139,27 @@ class DBFactory:
         for v in globalns.values():
             if inspect.isclass(v) and v is not DBTable and issubclass(v, DBTable) and not v.DB.meta:
                 tables.append(v)
-                self.use(v, schema)
+                self.bind(v, schema)
         for table in tables:
             table.resolve_types(globalns)
         for table in tables:
-            table.resolve_types_many(lambda t: self.use(t, schema))
+            table.resolve_types_many(lambda t: self.bind(t, schema))
 
-    def unbind(self):
-        """Unbind all tables"""
-        self._tables.clear()
+    def unbind(self, schema: str = "public"):
+        """Unbind all tables
+
+        Arguments:
+            schema: schema name to unbind. "Public" by default. If "None", unbind all tables from all schemas.
+        """
+        if schema is None:
+            self._tables.clear()
+        else:
+            for table in self._tables.copy():
+                if table.DB.schema == schema:
+                    self._tables.remove(table)
 
     def __contains__(self, item: str | DBTable) -> bool:
-        """Check if DBTable exists in database factory"""
+        """Check if DBTable exists in the database factory"""
         if isinstance(item, str):
             return any(item == table.__qualname__ for table in self._tables)
         else:
@@ -200,10 +209,10 @@ class DBFactory:
             query.filter(pk=pk)
         for k, v in fields.items():
             query.filter(lambda s: getattr(s, k) == v)
-        return query.fetchone()
+        return query.fetch_one()
 
     def get_connection(self) -> psycopg.Connection:
-        """Get database connection from then pool for low level operations"""
+        """Get database connection from then pool for low-level operations"""
         return self._connection_pool.getconn()
 
     def release_connection(self, conn: psycopg.Connection):
@@ -341,7 +350,7 @@ class DBFactory:
 
         :meta private:"""
         with self.select(self._trans.is_table_exists(table)) as res:
-            return res.fetchone()[0]
+            return res.fetch_one()[0]
 
     def create(self, schema: str = None):
         """Create all added tables in the database"""
@@ -611,7 +620,7 @@ class DBFactory:
                 .filter(lambda x: getattr(x, lookup_field) == getattr(item, lookup_field))\
                 .set_window(limit=1)\
                 .select(pk_name)\
-                .fetchvalue()
+                .fetch_value()
             if row_id:
                 setattr(item, pk_name, row_id)
                 self.update(item)
