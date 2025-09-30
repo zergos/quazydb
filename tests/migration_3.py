@@ -1,0 +1,9 @@
+from quazy import DBTable
+
+class SomeTable(DBTable):
+    name: str
+    one_more_field: int
+
+class ExtraTabel(DBTable):
+    value1: int
+    value2: int

@@ -124,17 +124,17 @@ class MigrationDifference(NamedTuple):
         return result
 
 def check_migrations(db: DBFactory) -> bool:
-    db.use_module(__name__)
+    db.bind_module(__name__)
     return db.check(_SCHEMA_)
 
 
 def activate_migrations(db: DBFactory):
-    db.use_module(__name__)
+    db.bind_module(__name__)
     db.create(_SCHEMA_)
 
 
 def clear_migrations(db: DBFactory, schema: str = None):
-    db.use_module(__name__)
+    db.bind_module(__name__)
     db.clear(schema or _SCHEMA_)
 
     if schema:
@@ -142,11 +142,11 @@ def clear_migrations(db: DBFactory, schema: str = None):
 
 
 def get_migrations_list(db: DBFactory, schema: str = 'public') -> list[Migration]:
-    return db.query(Migration).filter(schema=schema).sort_by(lambda x: x.index.as_integer()).fetchall()
+    return db.query(Migration).filter(schema=schema).sort_by(lambda x: x.index.as_integer).fetch_all()
 
 
 def compare_schema(db: DBFactory, rename_list: list[tuple[str, str]] | None = None, migration_index: str | None = None, schema: str = "public") -> MigrationDifference:
-    db.use_module(__name__)
+    db.bind_module(__name__)
 
     commands: list[MigrationCommand] = []
 
@@ -154,7 +154,7 @@ def compare_schema(db: DBFactory, rename_list: list[tuple[str, str]] | None = No
     last_migration = db.query(Migration)\
         .select('index', 'tables')\
         .filter(schema=schema, active=True)\
-        .fetchone()
+        .fetch_one()
 
     if not last_migration:
         return MigrationDifference([MigrationCommand(MigrationType.INITIAL, (None, ))], db.all_tables(schema))
@@ -183,8 +183,12 @@ def compare_schema(db: DBFactory, rename_list: list[tuple[str, str]] | None = No
         # get tables from the specified module
         all_tables = db.all_tables(schema)
     else:
+        # check migration index is within actual branch
+        actual_branch = db.query(Migration).select("index").chained("index", "next_index", "0001").fetch_list()
+        if migration_index not in actual_branch:
+            raise QuazyError(f'Migration index `{migration_index}` is orphaned and can not be reverted anymore')
         # get tables from the specified migration snapshot
-        selected_migration = db.query(Migration).select("tables").where(index=migration_index).fetchone()
+        selected_migration = db.query(Migration).select("tables").where(index=migration_index).fetch_one()
         if not selected_migration:
             raise QuazyError(f'No migration index `{migration_index}` found')
         all_tables = list(load_tables(selected_migration.tables).values())
@@ -380,7 +384,7 @@ def apply_changes(db: DBFactory, diff: MigrationDifference, comments: str = "", 
             # set migration statuses
             last_mig = db.get(Migration, active=True)
             if diff.migration_index is None:
-                max_index = db.query(Migration).filter(lambda x: x.schema == schema).fetch_max(lambda x: x.index.as_integer())
+                max_index = db.query(Migration).filter(lambda x: x.schema == schema).fetch_max(lambda x: x.index.as_integer)
                 next_index = f'{max_index+1:04d}'
                 save_migration(next_index)
                 if last_mig:
