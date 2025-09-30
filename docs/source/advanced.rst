@@ -44,6 +44,10 @@ Declaration
 
     from quazy import DBTable, DBField, Optional
 
+    # schema name for all tables in this module
+    # "public" by default, if not specified
+    _SCHEMA_ = "playground"
+
     class Customer(DBTable):
         # just a simple field definition, required by default (couldn't be None)
         simply_name: str
