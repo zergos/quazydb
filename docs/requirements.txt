@@ -1,0 +1,5 @@
+psycopg>=3.0.1
+psycopg-binary>=3.0.1
+psycopg-pool>=3.0
+PyYAML>=6.0.1
+jsonpickle>=2.0.0
