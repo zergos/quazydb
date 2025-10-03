@@ -18,5 +18,8 @@ GitHub project: https://github.com/zergos/quazydb
    :caption: Contents:
 
    user_guide
+   getting_started
    classes
    advanced
+   queries
+   disclaimer
