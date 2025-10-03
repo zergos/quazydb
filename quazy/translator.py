@@ -233,6 +233,8 @@ class Translator:
             return getattr(value, field.type.DB.pk.name)
         if issubclass(field.type, IntEnum):
             return value.value
+        if value is None:
+            return "NULL"
         return value
 
     @classmethod
@@ -405,16 +407,21 @@ UNION
                 view = value._field.type._view(value)
                 if view is not None:
                     fields.append(f'{view} AS "{field}__view"')
+        sources = []
         joins = []
         for join_name, join in query.joins.items():
             if join.kind == DBJoinKind.SOURCE:
-                op = 'FROM'
+                if issubclass(join.with_table, DBTable):
+                    sources.append(f'{cls.table_name(join.with_table)} AS "{join_name}"')
+                else:
+                    sources.append(cls.subquery_name(join.with_table))
             else:
                 op = f'{join.kind.value} JOIN'
-            if inspect.isclass(join.with_table) and issubclass(join.with_table, DBTable):
-                joins.append(f'{op} {cls.table_name(join.with_table)} AS "{join_name}"' + (f'\n\tON {cls.sql_value(join.condition)}' if join.condition else ''))
-            else:
-                joins.append(f'{op} {cls.subquery_name(join.with_table)}')
+                if issubclass(join.with_table, DBTable):
+                    joins.append(f'{op} {cls.table_name(join.with_table)} AS "{join_name}"' + (f'\n\tON {cls.sql_value(join.condition)}' if join.condition else ''))
+                else:
+                    sources.append(f'{op} {cls.subquery_name(join.with_table)}')
+
         if chained_mode == 2:
             joins.append(f'INNER JOIN "_chain" as "_chain" \n\tON "{query.table_class.DB.table}"."{query.chained_opts.id_name}" = "_chain"."{query.chained_opts.next_name}"')
 
@@ -441,7 +448,10 @@ UNION
             raise QuazyTranslatorException('No fields selected')
 
         sql += '\t' + ',\n\t'.join(fields) + '\n'
-        sql += '\n'.join(joins) + '\n'
+        if sources:
+            sql += 'FROM ' + ', '.join(sources) + '\n'
+        if joins:
+            sql += '\n'.join(joins) + '\n'
         if filters:
             sql += 'WHERE\n\t' + '\n\tAND '.join(filters) + '\n'
         if groups:

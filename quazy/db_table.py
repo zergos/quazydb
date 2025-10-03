@@ -239,23 +239,23 @@ class DBTable(metaclass=MetaTable):
         lookup_field: typing.ClassVar[str] = None
 
     class ItemGetter:
-        def __init__(self, db: DBFactory, table: type[DBTable], pk_id: Any, view: str = None):
+        def __init__(self, db: DBFactory, table: type[DBTable], pk_value: Any, view: str = None):
             self._db = db
             self._table = table
-            self._pk_id = pk_id
+            self._pk_value = pk_value
             self._view = view
 
         def __str__(self):
-            return self._view or self._pk_id
+            return self._view or f'{self._table.__qualname__}[{self._pk_value}]'
 
         def __getattr__(self, item):
             if item.startswith('_'):
                 return super().__getattribute__(self, item)
 
             if item == 'pk' or item == self._table.DB.pk.name:
-                return self._pk_id
+                return self._pk_value
 
-            related = self._db.query(self._table).select('pk', item).get(self._pk_id)
+            related = self._db.query(self._table).select('pk', item).get(self._pk_value)
             return getattr(related, item)
 
     @classmethod
@@ -263,8 +263,6 @@ class DBTable(metaclass=MetaTable):
         """Resolve fields types from annotations
 
         :meta private:"""
-        from .db_factory import DBFactory
-
         # eval annotations
         for name, t in typing.get_type_hints(cls, globals() | globalns, locals()).items():
             if name not in cls.DB.fields:  # or cls.fields[name].type is not None:
@@ -659,7 +657,9 @@ class DBTable(metaclass=MetaTable):
         return self.pk != other.pk if isinstance(other, DBTable) else other
 
     def __str__(self):
-        return f'{self.DB.title}({self.pk})'
+        return f'{self.DB.title}[{self.pk}]'
+
+    __repr__ = __str__
 
     def _before_update(self, db: DBFactory):
         """abstract event before update to the database"""

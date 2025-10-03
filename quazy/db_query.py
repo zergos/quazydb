@@ -40,6 +40,10 @@ class DBQueryField(typing.Generic[T]):
         self._path: str = path or table.DB.table
         self._field: DBField = field
 
+    def __contains__(self, item):
+        DB = self._table.DB
+        return item in DB.fields or item in DB.many_fields or item in DB.many_to_many_fields
+
     def __getattr__(self, item):
         if item.startswith('_'):
             return super().__getattribute__(item)
@@ -187,8 +191,8 @@ class DBSQL:
     def sql(self, sql: str) -> DBSQL:
         return DBSQL(self.query, sql, self.aggregated)
 
-    #def arg(self, value: Any) -> DBSQL:
-    #    return self.query.arg(value, self.aggregated)
+    def arg(self, value: Any) -> DBSQL:
+        return self.query.arg(value, self.aggregated)
     
     def func1(self, op: str) -> DBSQL:
         return self.sql(f'{op}({self.sql_text})')
@@ -366,6 +370,14 @@ class DBSQL:
     def __len__(self):
         return self.func2('length', 'UTF8')
 
+    @property
+    def is_null(self):
+        return self.sql(f'{self.sql_text} IS NULL')
+
+    @property
+    def is_not_null(self):
+        return self.sql(f'{self.sql_text} IS NOT NULL')
+
     def left(self, n: int) -> DBSQL:
         return self.func2('left', n)
 
@@ -384,15 +396,19 @@ class DBSQL:
         else:
             return self.func3('substr', pos, length)
 
+    @property
     def min(self):
         return self.aggregate('min')
 
+    @property
     def max(self):
         return self.aggregate('max')
 
+    @property
     def avg(self):
         return self.aggregate('avg')
 
+    @property
     def count(self):
         return self.aggregate('count')
 
@@ -511,8 +527,10 @@ class DBQuery(typing.Generic[T]):
         """Put context generated query into the hash"""
         cf = currentframe()
         line_no = cf.f_back.f_lineno
-        h = hash((__name__, line_no))
+        name = cf.f_back.f_code.co_name
+        h = hash((name, line_no))
         if h in DBQuery.queries:
+            self.__dict__ = DBQuery.queries[h].__dict__
             raise DBQuery.SaveException
         self._hash = h
 
@@ -579,7 +597,7 @@ class DBQuery(typing.Generic[T]):
                     print(q.fetch_one())
         """
         self.args[key] = value
-        return DBSQL(self, f'%({key})')
+        return DBSQL(self, f'%({key})s')
 
     def __setitem__(self, key, value):
         """Set variable to value
@@ -607,7 +625,7 @@ class DBQuery(typing.Generic[T]):
             if not expr:
                 raise QuazyFieldTypeError('Expression is empty string')
             if not is_expression_canonical(expr):
-                if self.table_class is not None and expr in self.table_class.DB.fields:
+                if isinstance(scheme, DBQueryField) and expr in scheme:
                     return getattr(scheme, expr)
                 return DBSQL(self, expr)
             chunks = expr.split('.')
@@ -666,6 +684,8 @@ class DBQuery(typing.Generic[T]):
         Returns:
             `DBQuery` for chain calls
         """
+        if not field_names and not fields:
+            return self
         if self.fetch_objects:
             if 'pk' not in field_names:
                 self.fetch_objects = False
