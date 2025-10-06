@@ -41,8 +41,11 @@ class DBQueryField(typing.Generic[T]):
         self._field: DBField = field
 
     def __contains__(self, item):
-        DB = self._table.DB
-        return item in DB.fields or item in DB.many_fields or item in DB.many_to_many_fields
+        if self._field is None:
+            DB = self._table.DB
+        elif self._field is not None and issubclass(self._field.type, DBTable):
+            DB = self._field.type.DB
+        return False if DB is None else item in DB.fields or item in DB.many_fields or item in DB.many_to_many_fields
 
     def __getattr__(self, item):
         if item.startswith('_'):
@@ -192,6 +195,8 @@ class DBSQL:
         return DBSQL(self.query, sql, self.aggregated)
 
     def arg(self, value: Any) -> DBSQL:
+        if value is not None and isinstance(value, DBSQL) and value.aggregated:
+            self.aggregated = True
         return self.query.arg(value, self.aggregated)
     
     def func1(self, op: str) -> DBSQL:
@@ -202,16 +207,16 @@ class DBSQL:
         return self.func1(op)
 
     def op(self, op: str, other: Any) -> DBSQL:
-        return self.sql(f'{self.sql_text}{op}{self.query.arg(other)!r}')
+        return self.sql(f'{self.sql_text}{op}{self.arg(other)!r}')
 
     def op_rev(self, op: str, other: Any) -> DBSQL:
-        return self.sql(f'{self.query.arg(other)!r}{op}{self.sql_text}')
+        return self.sql(f'{self.arg(other)!r}{op}{self.sql_text}')
 
     def func2(self, op: str, other: Any) -> DBSQL:
-        return self.sql(f'{op}({self.sql_text}, {self.query.arg(other)!r})')
+        return self.sql(f'{op}({self.sql_text}, {self.arg(other)!r})')
 
     def func3(self, op: str, second: Any, third: Any) -> DBSQL:
-        return self.sql(f'{op}({self.sql_text}, {self.query.arg(second)!r}, {self.query.arg(third)!r})')
+        return self.sql(f'{op}({self.sql_text}, {self.arg(second)!r}, {self.arg(third)!r})')
 
     def cast(self, type_name: str) -> DBSQL:
         return self.sql(f'{self.sql_text}::{type_name}')
@@ -356,7 +361,7 @@ class DBSQL:
     #    return self.contains(item)
 
     def contains(self, item) -> DBSQL:
-        return self.sql('{} LIKE {!r}'.format(self.sql_text, self.query.arg(f'%{item}%')))
+        return self.sql('{} LIKE {!r}'.format(self.sql_text, self.arg(f'%{item}%')))
 
     def __repr__(self):
         return self.sql_text
@@ -407,6 +412,10 @@ class DBSQL:
     @property
     def avg(self):
         return self.aggregate('avg')
+
+    @property
+    def sum(self):
+        return self.aggregate('sum')
 
     @property
     def count(self):
@@ -618,8 +627,10 @@ class DBQuery(typing.Generic[T]):
         if not scheme:
             scheme = self.scheme
         if callable(expr):
-            return expr(scheme)
+            return self.resolve(expr(scheme))
         if isinstance(expr, DBSQL):
+            if expr.aggregated:
+                self.has_aggregates = True
             return expr
         if isinstance(expr, str):
             if not expr:

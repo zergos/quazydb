@@ -24,7 +24,7 @@ class NamedTable(DBTable):
         return f'Named item is {self.name}'
 
     @classmethod
-    def _view(cls, item: DBQueryField[typing.Self]) -> DBQuery[typing.Self]:
+    def _view_(cls, item: DBQueryField[typing.Self]) -> DBQuery[typing.Self]:
         return item.name
 
 
@@ -71,7 +71,7 @@ class Catalog(DBTable):
     name: str
 
     @classmethod
-    def _view(cls, item: DBQueryField):
+    def _view_(cls, item: DBQueryField):
         return item.name
 
 

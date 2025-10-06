@@ -239,9 +239,10 @@ class DBTable(metaclass=MetaTable):
         lookup_field: typing.ClassVar[str] = None
 
     class ItemGetter:
-        def __init__(self, db: DBFactory, table: type[DBTable], pk_value: Any, view: str = None):
+        def __init__(self, db: DBFactory, table: type[DBTable], field_name: str, pk_value: Any, view: str = None):
             self._db = db
             self._table = table
+            self._attr_name = field_name
             self._pk_value = pk_value
             self._view = view
 
@@ -255,8 +256,14 @@ class DBTable(metaclass=MetaTable):
             if item == 'pk' or item == self._table.DB.pk.name:
                 return self._pk_value
 
-            related = self._db.query(self._table).select('pk', item).get(self._pk_value)
-            return getattr(related, item)
+            related = self._db.query(self._table).select(item).filter(pk=self._pk_value)
+            return related.fetch_value()
+
+        def fetch(self, *fields) -> DBTable:
+            actual_fields = fields + ('pk',) if fields else ()
+            value = self._db.query(self._table).select(*actual_fields).filter(pk=self._pk_value).fetch_one()
+            setattr(self._table, self._attr_name, value)
+            return value
 
     @classmethod
     def resolve_types(cls, globalns):
@@ -462,7 +469,7 @@ class DBTable(metaclass=MetaTable):
                         continue
                     elif field.ref:
                         view = initial.get(f'{k}__view', None)
-                        setattr(self, k, DBTable.ItemGetter(self._db_, field.type, v.pk if isinstance(v, DBTable) else v, view))
+                        setattr(self, k, DBTable.ItemGetter(self._db_, field.type, field.name, v.pk if isinstance(v, DBTable) else v, view))
                         continue
             # else:
             if k not in self.DB.fields and k not in self.DB.many_fields and k not in self.DB.many_to_many_fields:
@@ -542,6 +549,9 @@ class DBTable(metaclass=MetaTable):
                 if selected_field_name is not None:
                     return self
 
+        return self
+
+    def fetch(self, *fields) -> Self:
         return self
 
     def delete(self):
@@ -625,10 +635,10 @@ class DBTable(metaclass=MetaTable):
         return '\n'.join(res)
 
     @classmethod
-    def _view(cls, item: DBQueryField[typing.Self]) -> DBQuery[typing.Self] | None:
+    def _view_(cls, item: DBQueryField[typing.Self]):
         """virtual method to override DBTable item presentation
 
-        Originally, each table item is presented as a primary key value (integer number for ex.). It is more
+        Originally, each table item is requester as a primary key value (integer number for ex.). It is more
         convenient to see user-friendly presentation, like `name`, `caption` or several fields combined.
 
         Example:
@@ -637,7 +647,7 @@ class DBTable(metaclass=MetaTable):
                 class User(DBTable):
                     name: str
 
-                    def _view(self, item: DBQueryField):
+                    def _view_(self, item: DBQueryField):
                         return item.name
 
         :meta public:

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import inspect
 
+from sphinx.util.inspect import isclass
+
 from .db_types import *
 from .exceptions import *
 
@@ -373,7 +375,7 @@ class Translator:
 
     @classmethod
     def select(cls, query: DBQuery, chained_mode: int = 0) -> str:
-        from .db_query import DBJoinKind, DBQueryField
+        from .db_query import DBJoinKind, DBQueryField, DBQuery
         from .db_table import DBTable
 
         sql = ''
@@ -404,23 +406,23 @@ UNION
         for field, value in query.fields.items():
             fields.append(f'{cls.sql_value(value)} AS "{field}"') if field != '*' else fields.append(cls.sql_value(value))
             if isinstance(value, DBQueryField):
-                view = value._field.type._view(value)
+                view = value._field.type._view_(value)
                 if view is not None:
                     fields.append(f'{view} AS "{field}__view"')
         sources = []
         joins = []
         for join_name, join in query.joins.items():
             if join.kind == DBJoinKind.SOURCE:
-                if issubclass(join.with_table, DBTable):
-                    sources.append(f'{cls.table_name(join.with_table)} AS "{join_name}"')
-                else:
+                if isinstance(join.with_table, DBQuery):
                     sources.append(cls.subquery_name(join.with_table))
+                else:
+                    sources.append(f'{cls.table_name(join.with_table)} AS "{join_name}"')
             else:
                 op = f'{join.kind.value} JOIN'
-                if issubclass(join.with_table, DBTable):
-                    joins.append(f'{op} {cls.table_name(join.with_table)} AS "{join_name}"' + (f'\n\tON {cls.sql_value(join.condition)}' if join.condition else ''))
-                else:
+                if isinstance(join.with_table, DBQuery):
                     sources.append(f'{op} {cls.subquery_name(join.with_table)}')
+                else:
+                    joins.append(f'{op} {cls.table_name(join.with_table)} AS "{join_name}"' + (f'\n\tON {cls.sql_value(join.condition)}' if join.condition else ''))
 
         if chained_mode == 2:
             joins.append(f'INNER JOIN "_chain" as "_chain" \n\tON "{query.table_class.DB.table}"."{query.chained_opts.id_name}" = "_chain"."{query.chained_opts.next_name}"')
