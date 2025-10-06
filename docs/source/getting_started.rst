@@ -1,6 +1,18 @@
 Getting started
 ###############
 
+Install the module::
+
+    pip install quazydb
+
+Prepare empty database::
+
+    CREATE DATABASE quazy;
+    CREATE USER quazy WITH PASSWORD 'quazy';
+    GRANT ALL PRIVILEGES ON DATABASE quazy TO quazy;
+
+Everithing is ready to run your first script
+
 ..  code-block:: python
 
     # describe any tables
