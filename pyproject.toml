@@ -22,6 +22,17 @@ dependencies = [
 ]
 requires-python = ">=3.12"
 dynamic = ["version", "readme"]
+keywords = ["ORM", "database", "postgres", "model", "data"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Topic :: Database",
+
+]
+
+[project.urls]
+Documentation = "https://quazydb.readthedocs.io/en/latest/"
+Repository = "https://github.com/zergos/quazydb.git"
+Issues = "https://github.com/zergos/quazydb/issues"
 
 [tool.setuptools]
 package-dir = {quazy = "quazy"}
