@@ -14,22 +14,22 @@ Queries, which is not bound to a table, works as cross-table queries.
 
 Queiries works as subqueries for other queries.
 
-It is possible to extract data row as dict
+It is possible to extract data row as dict::
 
     row['col'] = "hello"
 
-or as `SimpleNamespace`
+or as `SimpleNamespace`::
 
     row.col = "hello"
 
-or as `DBTable` instance
+or as `DBTable` instance::
 
     row.col = "hello"
     row.save()
 
 It is possible to request one row, list of rows, or interate through result rows sequentially.
 
-It is possible to build queries as chain calls
+It is possible to build queries as chain calls::
 
     db.query().select(...).filter(...).group_by(...).exclude(...).fetch_all()
 
@@ -228,7 +228,243 @@ Multiple tables
     Two(name="Dil", numbers=3154).save()
 
     q = db.query()
+    # all tables are accessible from the schema by snake_names
     q.select(one="ones.name", two="twos.name")
     q.filter(lambda x: x.ones.numbers == x.twos.numbers)
     for x in q:
         print(x)
+
+
+Aggregates
+----------
+
+Deal with aggregates without worries about `GROUP BY` and `HAVING` clauses.
+
+..  code-block:: python
+
+    class Customer(DBTable):
+        name: str
+
+    class Sale(DBTable):
+
+        customer: Customer
+        amount: float
+
+    q = Sale.query()
+    print("Rows:", q.fetch_count())
+    print("Total:", q.fetch_sum("amount"))
+
+    q = Customer.query()
+    q.select("name", total=lambda x: x.sales.amount.sum)
+    q.filter(lambda x: x.sales.sell_date > datetime.now() - timedelta(days=7))
+    q.filter(lambda x: x.sales.amount.sum > 1000)
+
+SQL code generated::
+
+    SELECT
+        "customer".name AS "name",
+        sum("customer__sales".amount) AS "total"
+    FROM "public"."customer" AS "customer"
+    INNER JOIN "public"."sale" AS "customer__sales"
+        ON "customer".id = "customer__sales".customer
+    WHERE
+        "customer__sales".sell_date>%(_arg_1)s
+    GROUP BY
+        1
+    HAVING
+        sum("customer__sales".amount)>%(_arg_2)s
+
+Custom items represenantion
+---------------------------
+
+Let's imagine, you have a warehouse with books.
+
+..  code-block:: python
+
+    class Book(DBTable):
+        title: str
+        description: Text | None
+        author: str | None
+        year: int | None
+        pages: int | None
+
+    class Storage(DBTable):
+        book: Book
+        qty: int
+
+    b1 = Book(title="Alice in wonderland", description="A good book for kid").save()
+    b2 = Book(title="Rust for noobies", description="Not for kids").save()
+    b3 = Book(title="Backside of the life", description="For zombies").save()
+
+    Storage(book=b1, qty=5).save()
+    Storage(book=b2, qty=8).save()
+    Storage(book=b3, qty=10).save()
+
+
+Now we want to request all your rests.
+
+..  code-block:: python
+
+    for x in Storage.select("book", "qty"):
+        print(x)
+
+
+As a result we get::
+
+    Row(book=1, qty=5)
+    Row(book=2, qty=8)
+    Row(book=3, qty=10)
+
+Not something we want to, because there are no book names. Let's extend query.
+
+..  code-block:: python
+
+    for x in Storage.select("book.title", "qty"):
+        print(x)
+
+It gives::
+
+    Row(book_title='Alice in wonderland', qty=5)
+    Row(book_title='Rust for noobies', qty=8)
+    Row(book_title='Backside of the life', qty=10)
+
+
+Looks better. But what if we want dive deeper to book properties?
+It seems, we need to extract `id` explicitly and get a book by it.
+
+..  code-block:: python
+
+    for x in Storage.Select("book.id", "book.title", "qty"):
+        print(x)
+        print(Book[x.id].description)
+
+We get::
+
+    Row(book_id=1, book_title='Alice in wonderland', qty=5)
+    A good book for kid
+    Row(book_id=2, book_title='Rust for noobies', qty=8)
+    Not for kids
+    Row(book_id=3, book_title='Backside of the life', qty=10)
+    For zombies
+
+But it's even much better to define a presentation path with special method override
+
+..  code-block:: python
+
+    class Book(DBTable):
+        title: str
+        description: Text | None
+        author: str | None
+        year: int | None
+        pages: int | None
+
+        @classmethod
+        def _view_(cls, item: DBQueryField[typing.Self]):
+            return item.title
+
+    for x in Storage.select("book", "qty"):
+        print(x)
+
+We are getting `__view` field now::
+
+    Row(book=1, book__view='Alice in wonderland', qty=5)
+    Row(book=2, book__view='Rust for noobies', qty=8)
+    Row(book=3, book__view='Backside of the life', qty=10)
+
+..  note::
+
+    Method `_view_` should return `DBSQL` object, so it has to perform QuazyDB-compatible expression.
+    Strings or any other values are unsupported.
+
+Let's simplify even more and check actual SQL query:
+
+..  code-block:: python
+
+    for x in Storage.query():
+        print(x)
+
+Actual query::
+
+    SELECT
+        "storage".book AS "book",
+        "storage__books".title AS "book__view",
+        "storage".qty AS "qty",
+        "storage".id AS "id"
+    FROM "public"."storage" AS "storage"
+    INNER JOIN "public"."book" AS "storage__books"
+        ON "storage".book = "storage__books".id
+
+Results::
+
+    Storage[1]
+    Storage[2]
+    Storage[3]
+
+Results doesn't seem interesing. Let's make it human-readable
+
+..  code-block:: python
+
+    class Storage(DBTable):
+        book: BookA
+        qty: int
+
+        def __str__(self):
+            return f'{self.book} -> {self.qty}'
+
+And new results::
+
+    Alice in wonderland -> 5
+    Rust for noobies -> 8
+    Backside of the life -> 10
+
+Row `id` is accessible also via `pk` property:
+
+..  code-block:: python
+
+    class Storage(DBTable):
+        book: BookA
+        qty: int
+
+        def __str__(self):
+            return f'{self.book.pk}:: {self.book} -> {self.qty}'
+
+Results::
+
+    1:: Alice in wonderland -> 5
+    2:: Rust for noobies -> 8
+    3:: Backside of the life -> 10
+
+More then that is it even possible to perform implicit `get`
+
+..  code-block:: python
+
+    for x in Storage.query():
+        print(x)
+        print(x.book.description)
+
+Voila::
+
+    1:: Alice in wonderland -> 5
+    A good book for kid
+    2:: Rust for noobies -> 8
+    Not for kids
+    3:: Backside of the life -> 10
+    For zombies
+
+Such operation performs simple query for each execution, with no caching. Use with aware::
+
+    SELECT
+        "book".description AS "description"
+    FROM "public"."book" AS "book"
+    WHERE
+        "book".id=%(_arg_1)s
+
+There is a helper method to fetch all fields or related item and cache for a further usage.
+
+..  code-block:: python
+
+    for x in Storage.query():
+        print(x)
+        # call `fetch` one time and no further calls necessary
+        print(x.book.fetch().description)
+        # just use `x.book.description` after
