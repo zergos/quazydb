@@ -3,7 +3,7 @@ Queiries
 
 QyazyDB supports wide subset of SQL features, including expressions, filters, joins and grouping.
 
-Theory
+Basics
 ======
 
 The query is represented by `DBQuery` class.

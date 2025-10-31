@@ -2,9 +2,9 @@ Why another ORM?
 ################
 
 From all modern frameworks like `Django`_, `SQLAlchemy`_ , `PonyORM`_ and even `peewee`_ we have many beautiful instruments to perform
-many task. They cover wide area of database management problems, each focused on specific approach.
+database tasks. They cover wide area of database management problems, each focused on specific approach.
 
-But, let's say I have my own way of beautiful vision of how the things should be the way I would love to.
+But, let's say I have my own way of beautiful vision of how the things should be the way I love to.
 
 .. _Django: https://www.djangoproject.com/
 .. _SQLAlchemy: https://www.sqlalchemy.org/
