@@ -235,8 +235,6 @@ class Translator:
             return getattr(value, field.type.DB.pk.name)
         if issubclass(field.type, IntEnum):
             return value.value
-        if value is None:
-            return "NULL"
         return value
 
     @classmethod
