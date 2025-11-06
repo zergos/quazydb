@@ -602,36 +602,39 @@ class DBFactory:
         return res
 
 
-    def save(self, item: T, lookup_field: str | None = None) -> T:
+    def save(self, _item: T, _lookup_field: str | None = None, **kwargs) -> T:
         """Save item to the database
 
         It checks whether an item needs to be inserted or updated. Specify `lookup_field` to avoid searching by a primary key.
 
         Args:
-            item: instance of DBTable
-            lookup_field: field name or None
+            _item: instance of DBTable
+            _lookup_field: field name or None
+            kwargs: additional values to update item fields before saving it to the database
 
         Returns:
             updated instance, just for chain calls
         """
-        pk_name = item.__class__.DB.pk.name
-        if lookup_field:
-            row_id = self.query(item.__class__)\
-                .filter(lambda x: getattr(x, lookup_field) == getattr(item, lookup_field))\
+        for name, value in kwargs.items():
+            setattr(_item, name, value)
+        pk_name = _item.__class__.DB.pk.name
+        if _lookup_field:
+            row_id = self.query(_item.__class__)\
+                .filter(lambda x: getattr(x, _lookup_field) == getattr(_item, _lookup_field))\
                 .set_window(limit=1)\
                 .select(pk_name)\
                 .fetch_value()
             if row_id:
-                setattr(item, pk_name, row_id)
-                self.update(item)
+                setattr(_item, pk_name, row_id)
+                self.update(_item)
             else:
-                self.insert(item)
+                self.insert(_item)
         else:
-            if getattr(item, pk_name):
-                self.update(item)
+            if getattr(_item, pk_name):
+                self.update(_item)
             else:
-                self.insert(item)
-        return item
+                self.insert(_item)
+        return _item
 
     def delete(self, table: type[DBTable] = None, *,
                item: T = None,

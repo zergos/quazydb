@@ -459,7 +459,7 @@ class DBTable(metaclass=MetaTable):
         #        setattr(self, field_name, set())
         for field_name, field in self.DB.many_fields.items():
             setattr(self, field_name, set())
-        for k, v in initial.items():
+        for k, v in initial.copy().items():
             if k.endswith("__view"):
                 continue
             if self._db_:
@@ -468,7 +468,7 @@ class DBTable(metaclass=MetaTable):
                         setattr(self, k, field.type(v) if v is not None else None)
                         continue
                     elif field.ref:
-                        view = initial.get(f'{k}__view', None)
+                        view = initial.pop(f'{k}__view', None)
                         setattr(self, k, DBTable.ItemGetter(self._db_, field.type, field.name, v.pk if isinstance(v, DBTable) else v, view))
                         continue
             # else:
@@ -515,10 +515,14 @@ class DBTable(metaclass=MetaTable):
         cls.check_db()
         return cls.DB.db.get(cls, pk, **fields)
 
-    def save(self) -> Self:
-        """Save DBTable instance changes to a database"""
+    def save(self, **kwargs) -> Self:
+        """Save DBTable instance changes to a database
+
+        Args:
+            kwargs: additional values to update item fields before saving it to the database
+        """
         self.check_db()
-        return self.DB.db.save(self)
+        return self.DB.db.save(self, **kwargs)
 
     def load(self, selected_field_name: str | None = None) -> Self:
         """Load related items from foreign tables
