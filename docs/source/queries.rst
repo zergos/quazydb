@@ -468,3 +468,64 @@ There is a helper method to fetch all fields or related item and cache for a fur
         # call `fetch` one time and no further calls necessary
         print(x.book.fetch().description)
         # just use `x.book.description` after
+
+SQL `CASE` statement
+--------------------
+
+QuazyDB supports SQL `CASE ...` syntax out-of-the box:
+
+..  code-block:: python
+
+    class User(DBTable):
+        name: str
+        age: int
+
+    q = db.query(User)
+    c = q.case().
+        condition("baby", lambda x: x.age <= 1).
+        condition("toddler", lambda x: x.age <= 3).
+        condition("kid", lambda x: x.age < 18).
+        default("adult")
+    for x in q.select("name", age_category=c):
+        print(x.name, "is a", x.age_category)
+
+Chained selection
+-----------------
+
+QuazyDB has strong support of One-to-Self relations, in case you build hierarchy of elements.
+
+..  code-block:: python
+
+    class Chained(DBTable):
+        name: str
+        next: 'Chained | None'
+
+        @classmethod
+        def _view_(cls, item):
+            return item.name
+
+
+    # prefill table
+    for i in range(20):
+        db.insert(Chained(name=f"Chained #{i+1}"))
+    # update with random links
+    for i in range(20):
+        link = i+2+randint(0, 3)
+        if link < 20:
+            Chained[i+1].save(next=link)
+
+    q = db.query(Chained2).chained("id", "next", 1)
+
+    for x in q:
+        print(x.name, "==>", x.next)
+
+The output would randomly get to this::
+
+    Chained #1 ==> Chained #3
+    Chained #3 ==> Chained #7
+    Chained #7 ==> Chained #9
+    Chained #9 ==> Chained #12
+    Chained #12 ==> Chained #14
+    Chained #14 ==> Chained #16
+    Chained #16 ==> Chained #18
+    Chained #18 ==> Chained[None]

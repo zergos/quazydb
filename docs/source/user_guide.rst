@@ -190,9 +190,9 @@ Queries result types
 Let's collect information about query result fields before actual execution.
 We would really need it to prepare user intefrace in advance.
 
-.. code-block::
+..  code-block::
 
-    fields = query.describe()
+    fields: list[DBField] = query.describe()
     for f in fields:
         print(f'{f.name} - {f.type.__name__}')
 
