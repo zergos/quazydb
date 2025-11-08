@@ -309,6 +309,8 @@ class DBSQL:
         return self.func1('~')
 
     def __lshift__(self, other) -> DBSQL:
+        if isinstance(other, DBQuery):
+            return self << self.query.with_query(other)
         return self.op(" IN ", other)
 
     def lshift(self, other) -> DBSQL:
