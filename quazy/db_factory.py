@@ -172,13 +172,14 @@ class DBFactory:
                 return table
         raise KeyError(item)
 
-    def query(self, table_class: Optional[type[T]] = None) -> DBQuery[T]:
+    def query(self, table_class: Optional[type[T]] = None, name: Optional[str] = None) -> DBQuery[T]:
         """Create DBQuery instance
 
         Create a DBQuery instance bound to a specified DBTable or to the whole schema
 
         Args:
             table_class: DBTable class to use or None
+            name: name of the query for subquery request
 
         Returns:
             DBQuery instance
@@ -188,7 +189,7 @@ class DBFactory:
             q = db.query().select(name=lambda s: s.street.name)
         """
         from .db_query import DBQuery
-        return DBQuery[T](self, table_class)
+        return DBQuery[T](self, table_class, name)
 
     def get(self, table_class: type[T], pk: Any = None, **fields) -> T:
         """Request one row from a database table
@@ -620,7 +621,7 @@ class DBFactory:
         pk_name = _item.__class__.DB.pk.name
         if _lookup_field:
             row_id = self.query(_item.__class__)\
-                .filter(lambda x: getattr(x, _lookup_field) == getattr(_item, _lookup_field))\
+                .filter(lambda x: x[_lookup_field] == getattr(_item, _lookup_field))\
                 .set_window(limit=1)\
                 .select(pk_name)\
                 .fetch_value()
@@ -668,12 +669,12 @@ class DBFactory:
             if table is None:
                 raise QuazyWrongOperation("Both `id` and `table` should be specified")
             with self.connection(reuse_conn) as conn:
-                sql = self._trans.delete_related(table, table.DB.pk.name)
+                sql = self._trans.delete_related(table, table.DB.pk.column)
                 conn.execute(sql, (id, ))
         elif item is not None:
             item._before_delete(self)
             with self.connection(reuse_conn) as conn:
-                sql = self._trans.delete_related(type(item), item.DB.pk.name)
+                sql = self._trans.delete_related(type(item), item.DB.pk.column)
                 conn.execute(sql, (item.pk, ))
             item._after_delete(self)
         elif items is not None:

@@ -152,9 +152,9 @@ class MetaTable(type):
 
         return fields
 
-    def __getitem__(cls, item: type[DBTable]):
+    def __getitem__(cls, item: Any):
         if not cls.DB.db:
-            raise QuazyWrongOperation("Table is not assigned to a database")
+            raise QuazyWrongOperation(f"Table `{cls.__qualname__}` is not assigned to a database")
         return cls.DB.db.get(cls, item)
 
 
@@ -564,14 +564,17 @@ class DBTable(metaclass=MetaTable):
         self.DB.db.delete(item=self)
 
     @classmethod
-    def query(cls) -> DBQuery[Self]:
+    def query(cls, name: str | None = None) -> DBQuery[Self]:
         """Create a DBQuery instance for queries associated with this table
+
+        Args:
+            name: name of the query for subquery request
 
         Hint:
             Use identical method name `select` for your preference.
         """
         cls.check_db()
-        return cls.DB.db.query(cls)
+        return cls.DB.db.query(cls, name)
 
     @classmethod
     def select(cls, *field_names: str, **fields: FDBSQL) -> DBQuery[Self]:
@@ -651,7 +654,8 @@ class DBTable(metaclass=MetaTable):
                 class User(DBTable):
                     name: str
 
-                    def _view_(self, item: DBQueryField):
+                    @classmethod
+                    def _view_(cls, item: DBQueryField):
                         return item.name
 
         :meta public:

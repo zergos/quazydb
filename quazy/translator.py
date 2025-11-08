@@ -404,7 +404,7 @@ UNION
         for field, value in query.fields.items():
             fields.append(f'{cls.sql_value(value)} AS "{field}"') if field != '*' else fields.append(cls.sql_value(value))
             if isinstance(value, DBQueryField):
-                view = value._field.type._view_(value)
+                view = value._table._view_(value)
                 if view is not None:
                     fields.append(f'{view} AS "{field}__view"')
         sources = []
@@ -420,7 +420,7 @@ UNION
                 if isinstance(join.with_table, DBQuery):
                     sources.append(f'{op} {cls.subquery_name(join.with_table)}')
                 else:
-                    joins.append(f'{op} {cls.table_name(join.with_table)} AS "{join_name}"' + (f'\n\tON {cls.sql_value(join.condition)}' if join.condition else ''))
+                    joins.append(f'{op} {cls.table_name(join.with_table)} AS "{join_name}"' + (f'\n\tON {cls.sql_value(join.condition.format(join_alias=join_name))}' if join.condition else ''))
 
         if chained_mode == 2:
             joins.append(f'INNER JOIN "_chain" as "_chain" \n\tON "{query.table_class.DB.table}"."{query.chained_opts.id_name}" = "_chain"."{query.chained_opts.next_name}"')
@@ -449,13 +449,15 @@ UNION
 
         sql += '\t' + ',\n\t'.join(fields) + '\n'
         if sources:
-            sql += 'FROM ' + ', '.join(sources) + '\n'
+            sql += f'FROM {sources[0]}\n'
         if joins:
             sql += '\n'.join(joins) + '\n'
+        if len(sources) > 1:
+            sql += ', ' + ', '.join(sources[1:]) + '\n'
         if filters:
             sql += 'WHERE\n\t' + '\n\tAND '.join(filters) + '\n'
         if groups:
-            sql += 'GROUP BY\n\t' + '\n\t'.join(groups) + '\n'
+            sql += 'GROUP BY\n\t' + ',\n\t'.join(groups) + '\n'
             if group_filters:
                 sql += 'HAVING\n\t' + '\n\tAND '.join(group_filters) + '\n'
         if orders:
@@ -480,7 +482,7 @@ UNION
             sql += cls.with_select(query.with_queries)
 
         sql += f'''DELETE FROM {cls.table_name(query.table_class)} USING "{subquery._path}"
-        WHERE {cls.table_name(query.table_class)}."{query.table_class.DB.pk.name}" = "{subquery._path}"."{query.table_class.DB.pk.name}"'''
+        WHERE {cls.table_name(query.table_class)}."{query.table_class.DB.pk.column}" = "{subquery._path}"."{query.table_class.DB.pk.column}"'''
 
         return sql
 

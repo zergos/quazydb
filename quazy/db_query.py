@@ -34,71 +34,66 @@ def is_expression_canonical(expr: str) -> bool:
 is_expression_canonical.r = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]+([.][a-zA-Z_][a-zA-Z0-9_]+)+$")
 
 class DBQueryField(typing.Generic[T]):
-    def __init__(self, query: DBQuery, table: type[T], path: str = None, field: DBField = None):
+    def __init__(self, query: DBQuery, table: type[T], alias: str = None, join: DBJoin = None, repr: str = None):
         self._query: DBQuery[T] = query
         self._table: type[T] = table
-        self._path: str = path or table.DB.table
-        self._field: DBField = field
+        self._alias: str = alias or table.DB.table
+        self._join: DBJoin = join
+        self._repr: str = repr
 
     def __contains__(self, item):
-        if self._field is None:
-            DB = self._table.DB
-        elif self._field is not None and issubclass(self._field.type, DBTable):
-            DB = self._field.type.DB
+        DB = self._table.DB
         return False if DB is None else item in DB.fields or item in DB.many_fields or item in DB.many_to_many_fields
+
+    def __call__(self, sub_name: str) -> DBQueryField[T]:
+        if not sub_name.strip():
+            raise QuazyWrongOperation('`sub_name` cannot be empty string')
+        return DBQueryField(self._query, self._table, self._alias + '_' + sub_name, self._join)
 
     def __getattr__(self, item):
         if item.startswith('_'):
             return super().__getattribute__(item)
 
-        if not self._field:
-            if self._path not in self._query.joins:
-                self._query.joins[self._path] = DBJoin(DBJoinKind.SOURCE, self._table)
-        else:
-            join_path = f'{self._table.DB.table}__{self._field.name}s'
-            if join_path not in self._query.joins:
-                join_kind = DBJoinKind.INNER if self._field.required else DBJoinKind.LEFT
-                self._query.joins[join_path] = DBJoin(join_kind, self._field.type,
-                                                      f'{self._path} = "{join_path}".{self._field.type.DB.pk.name}')
-            return getattr(DBQueryField(self._query, self._field.type, join_path), item)
+        if self._alias not in self._query.joins:
+            self._query.joins[self._alias] = self._join or DBJoin(DBJoinKind.SOURCE, self._table)
 
         DB = self._table.DB
         if item in DB.fields:
             field: DBField = DB.fields[item]
             if not field.property:
-                field_path = f'"{self._path}".{item}'
+                field_path = f'"{self._alias}".{field.column}'
             else:
-                field_path = f'"{self._path}".{DB.body.name}'
+                field_path = f'"{self._alias}".{DB.body.column}'
                 field_path = self._query.db._trans.json_deserialize(field, f"{field_path}->>'{item}'")
 
             if field.ref:
-                return DBQueryField(self._query, self._table, field_path, field)
+                join_alias = f'{self._table.DB.table}__{field.name}s'
+                join_kind = DBJoinKind.INNER if field.required else DBJoinKind.LEFT
+                join = DBJoin(join_kind, field.type,
+                        f'{field_path} = "{{join_alias}}".{field.type.DB.pk.column}')
+                return DBQueryField(self._query, field.type, join_alias, join, field_path)
             return DBSQL(self._query, f'{field_path}')
 
         elif table := DB.subtables.get(item):
-            join_path = f'{self._path}__{item}'
-            if join_path not in self._query.joins:
-                self._query.joins[join_path] = DBJoin(DBJoinKind.INNER, table,
-                                                  f'"{self._path}".{DB.pk.name} = "{join_path}".{DB.table}')
-            return DBQueryField(self._query, table, join_path)
+            join_alias = f'{self._alias}__{item}'
+            join = DBJoin(DBJoinKind.INNER, table, f'"{self._alias}".{DB.pk.column} = "{{join_alias}}".{DB.table}')
+            return DBQueryField(self._query, table, join_alias, join)
 
         elif  many_field := DB.many_fields.get(item):
-            join_path = f'{self._path}__{item}'
-            if join_path not in self._query.joins:
-                self._query.joins[join_path] = DBJoin(DBJoinKind.INNER, many_field.foreign_table,
-                                                  f'"{self._path}".{DB.pk.name} = "{join_path}".{many_field.foreign_field}')
-            return DBQueryField(self._query, many_field.foreign_table, join_path)
+            join_alias = f'{self._alias}__{item}'
+            join = DBJoin(DBJoinKind.LEFT, many_field.foreign_table,
+                    f'"{self._alias}".{DB.pk.column} = "{{join_alias}}".{many_field.foreign_field}')
+            return DBQueryField(self._query, many_field.foreign_table, join_alias, join)
 
         elif many_to_many_field := DB.many_to_many_fields.get(item):
             join_path_middle = f'{many_to_many_field.middle_table.DB.table}'
             if join_path_middle not in self._query.joins:
                 self._query.joins[f'{join_path_middle}'] = DBJoin(DBJoinKind.INNER, many_to_many_field.middle_table,
-                                                  f'"{self._path}".{DB.pk.name} = "{join_path_middle}".{self._table.DB.table}')
-            join_path = f'{self._path}__{item}'
-            if join_path not in self._query.joins:
-                self._query.joins[join_path] = DBJoin(DBJoinKind.INNER, many_to_many_field.foreign_table,
-                                                  f'"{join_path_middle}".{many_to_many_field.foreign_table.DB.table} = "{join_path}".{many_to_many_field.foreign_table.DB.pk.name}')
-            return DBQueryField(self._query, many_to_many_field.foreign_table, join_path)
+                                                  f'"{self._alias}".{DB.pk.column} = "{join_path_middle}".{self._table.DB.table}')
+            join_alias = f'{self._alias}__{item}'
+            join = DBJoin(DBJoinKind.INNER, many_to_many_field.foreign_table,
+                          f'"{join_path_middle}".{many_to_many_field.foreign_table.DB.table} = "{{join_alias}}".{many_to_many_field.foreign_table.DB.pk.column}')
+            return DBQueryField(self._query, many_to_many_field.foreign_table, join_alias, join)
 
         raise QuazyFieldNameError(f'field `{item}` is not found in `{DB.table}`')
     
@@ -106,17 +101,22 @@ class DBQueryField(typing.Generic[T]):
         return getattr(self, item)
 
     def __str__(self):
-        return self._path
+        if not self._repr:
+            raise QuazyWrongOperation(f"Field `{self._alias}` is not accessible for direct select")
+        return self._repr
 
     def __eq__(self, other) -> DBSQL:
-        return DBSQL(self._query, self._path) == other
+        return self.pk == other
 
     def __ne__(self, other) -> DBSQL:
-        return DBSQL(self._query, self._path) != other
+        return self.pk != other
+
+    def __lshift__(self, other) -> DBSQL:
+        return self.pk << other
 
     @property
-    def pk(self):
-        return getattr(self, self._table.DB.pk.name)
+    def pk(self) -> DBSQL:
+        return getattr(self, self._table.DB.pk.column)
 
 
 class DBSubqueryField:
@@ -130,7 +130,14 @@ class DBSubqueryField:
             return super().__getattribute__(item)
 
         if self._path not in self._query.joins:
-            self._query.joins[self._path] = DBJoin(DBJoinKind.SOURCE, self._subquery)
+            if (self._query.table_class and
+                    self._subquery.table_class == self._query.table_class and
+                    self._query.table_class.DB.pk.column in self._subquery.fields):
+                DB: DBTable.DB = self._query.table_class.DB 
+                self._query.joins[self._path] = DBJoin(DBJoinKind.LEFT, self._subquery,
+                    f'"{DB.table}".{DB.pk.column} = "{self._path}".{DB.pk.column}')
+            else:
+                self._query.joins[self._path] = DBJoin(DBJoinKind.SOURCE, self._subquery)
 
         if item in self._subquery.fields:
             return DBSQL(self._query, f'{self._path}.{item}')
@@ -221,6 +228,9 @@ class DBSQL:
     def cast(self, type_name: str) -> DBSQL:
         return self.sql(f'{self.sql_text}::{type_name}')
     
+    def prefix(self, sql_text: str) -> DBSQL:
+        return self.sql(f'{sql_text} {self.sql_text}')
+
     def postfix(self, sql_text: str) -> DBSQL:
         return self.sql(f'{self.sql_text} {sql_text}')
 
@@ -421,6 +431,10 @@ class DBSQL:
     def count(self):
         return self.aggregate('count')
 
+    @property
+    def count_distinct(self):
+        return self.prefix('DISTINCT').count
+
 
 class DBJoinKind(Enum):
     SOURCE = "SOURCE"  # no join, base table to select
@@ -578,6 +592,8 @@ class DBQuery(typing.Generic[T]):
             return DBSQL(self, 'NULL')
         if isinstance(value, DBTable):
             value = value.pk
+        if isinstance(value, DBSubqueryField):
+            return DBSQL(self, f'(SELECT * FROM {value})', aggregated)
         if value in self.args.values():
             key = next(k for k, v in self.args.items() if v == value)
             #key = list(self.args.keys())[list(self.args.values()).index(value)]
@@ -701,7 +717,7 @@ class DBQuery(typing.Generic[T]):
             if 'pk' not in field_names:
                 self.fetch_objects = False
             else:
-                self.fields[self.table_class.DB.pk.name] = self.scheme.pk
+                self.fields[self.table_class.DB.pk.column] = self.scheme.pk
                 field_names = set(field_names) - {'pk'}
         for field_name in field_names:
             self.fields[field_name] = self.resolve(field_name)
@@ -873,23 +889,27 @@ class DBQuery(typing.Generic[T]):
         expr = self.resolve(expr)
         return expr.aggregate('sum')
 
-    def count(self, expr: FDBSQL = None) -> DBSQL:
+    def count(self, expr: FDBSQL = None, distinct: bool = False) -> DBSQL:
         """Use aggregated function `count` as a part of the expression
 
         If no argument is specified, count all result rows.
+
+        Arguments:
+            expr: expression as a path to the table field
+            distinct: count distinct rows
 
         Example:
             .. code-block:: python
 
                 q = db.query(Posts)
-                q = q.group_by("topic").select("topic", total_views=q.count())
+                q = q.group_by("topic").select("topic", total_views=q.count)
         """
         if expr is None:
             expr = DBSQL(self, '*')
         else:
             expr = self.resolve(expr)
         self.has_aggregates = True
-        return expr.aggregate('count')
+        return expr.count if not distinct else expr.count_distinct
 
     def avg(self, expr: FDBSQL) -> DBSQL:
         """Use aggregated function `avg` (average) as a part of the expression"""
@@ -1001,9 +1021,9 @@ class DBQuery(typing.Generic[T]):
             result = result | expr
         return result
 
-    def __getitem__(self, item: Any) -> T | None:
-        """Short form to get item by primary key identifier"""
-        return self.get(item)
+    def __getitem__(self, item: Any) -> DBSQL:
+        """Get an expression for the selected field"""
+        return self.fields[item]
 
     def fetch_all(self, as_dict: bool = False) -> list[T | Any]:
         """Execute a query and fetch all result rows as a list"""
