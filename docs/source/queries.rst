@@ -132,6 +132,9 @@ It is possible to write Python-like expressions to make translated to SQL direct
 +-------------------+-------------------------------+
 | expr.count        | count(expr)                   |
 +-------------------+-------------------------------+
+| expr.count_       | count(distinct expr)          |
+|    distinct       |                               |
++-------------------+-------------------------------+
 | expr.avg          | avg(expr)                     |
 +-------------------+-------------------------------+
 
