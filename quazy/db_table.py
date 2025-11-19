@@ -5,6 +5,14 @@ import re
 import sys
 import inspect
 
+try:
+    from pydantic import TypeAdapter, ConfigDict
+    VALIDATE_DATA = True
+    PYDANTIC_CONFIG = ConfigDict(arbitrary_types_allowed=True, strict=False)
+except ImportError:
+    VALIDATE_DATA = False
+    pass
+
 from .db_field import DBField, UX, DBManyField, DBManyToManyField
 from .db_types import *
 from .exceptions import *
@@ -26,7 +34,7 @@ camel2snake.r = re.compile(
 class MetaTable(type):
     db_base_class: type[DBTable.DB]
 
-    def __new__(cls, clsname: str, bases: tuple[type[DBTable], ...], attrs: dict[str, Any]):
+    def __new__(cls, clsname: str, bases: tuple[type[DBTable], ...], attrs: dict[str, Any], **kwargs: Any) -> type[DBTable]:
         if clsname == 'DBTable':
             cls.db_base_class = attrs['DB']
             return super().__new__(cls, clsname, bases, attrs)
@@ -35,9 +43,9 @@ class MetaTable(type):
             raise QuazyError(f'Should not define `DB` subclass directly in `{clsname}`, use `_name_` form')
 
         spec_attrs = {}
-        for name in 'db table title schema just_for_typing extendable discriminator meta'.split():
+        for name in 'db table title schema just_for_typing extendable discriminator meta lookup_field validate'.split():
             src_name = f'_{name}_'
-            if value := attrs.pop(src_name, None):
+            if (value := attrs.pop(src_name, None)) is not None:
                 spec_attrs[name] = value
 
         if 'title' not in spec_attrs:
@@ -70,7 +78,9 @@ class MetaTable(type):
 
         if '_discriminator_' not in attrs:
             DB.discriminator = attrs['__qualname__'] if DB.cid else None
-        return super().__new__(cls, clsname, bases, attrs)
+
+        new_cls = super().__new__(cls, clsname, bases, attrs, **kwargs)
+        return new_cls
 
     @staticmethod
     def collect_fields(bases: tuple[type[DBTable], ...], DB: type[DBTable.DB], attrs: dict[str, Any]):
@@ -152,11 +162,6 @@ class MetaTable(type):
 
         return fields
 
-    def __getitem__(cls, item: Any):
-        if not cls.DB.db:
-            raise QuazyWrongOperation(f"Table `{cls.__qualname__}` is not assigned to a database")
-        return cls.DB.db.get(cls, item)
-
 
 class DBTable(metaclass=MetaTable):
     """Table model constructor
@@ -174,6 +179,7 @@ class DBTable(metaclass=MetaTable):
         _discriminator_:   SQL safe CID value to specify table in extended mode
         _meta_:            mark the table as pure abstract, just for inheritance with common field set
         _lookup_field_:    specify field name for text search. For integrations only.
+        _validate_:        validate fields types using `pydantic` (default: True if `pydantic` is installed)
 
     Note:
         special field name `pk` is reserved as property for direct primary key access
@@ -182,13 +188,15 @@ class DBTable(metaclass=MetaTable):
     _table_: typing.ClassVar[str]
     _title_: typing.ClassVar[str]
     _schema_: typing.ClassVar[str]
-    _just_for_typing_: typing.ClassVar[str]
+    _just_for_typing_: typing.ClassVar[bool]
     _extendable_: typing.ClassVar[bool]
     _discriminator_: typing.ClassVar[typing.Any]
     _meta_: typing.ClassVar[bool]
     _lookup_field_: typing.ClassVar[str]
+    _validate_: typing.ClassVar[bool]
 
     # state attributes
+    __slots__ = ('_db_', '_modified_fields_')
     _db_: DBFactory | None
     _modified_fields_: set[str]
 
@@ -217,26 +225,30 @@ class DBTable(metaclass=MetaTable):
             many_to_many_fields:    dict of field sets, when two tables referred to each other
             fields:                 all fields dict
             lookup_field:           field name for text search for integrations
+            validate:               validate fields types using `pydantic`
+            validators:             dict of validators for fields
         """
-        db: typing.ClassVar[DBFactory] | None = None
-        table: typing.ClassVar[str] = None
-        title: typing.ClassVar[str] = None
-        schema: typing.ClassVar[str] = None
+        db: typing.ClassVar[DBFactory]
+        table: typing.ClassVar[str | None] = None
+        title: typing.ClassVar[str | None] = None
+        schema: typing.ClassVar[str | None] = None
         just_for_typing: typing.ClassVar[bool] = False
         snake_name: typing.ClassVar[str]
         extendable: typing.ClassVar[bool] = False
-        cid: typing.ClassVar[DBField] = None
+        cid: typing.ClassVar[DBField | None] = None
         is_root: typing.ClassVar[bool] = False
-        discriminator: typing.ClassVar[typing.Any]
-        owner: typing.ClassVar[typing.Union[str, type[DBTable]]] = None
-        subtables: typing.ClassVar[dict[str, type[DBTable]]] = None
+        discriminator: typing.ClassVar[typing.Any | None] = None
+        owner: typing.ClassVar[typing.Union[str, type[DBTable]] | None] = None
+        subtables: typing.ClassVar[dict[str, type[DBTable]] | None] = None
         meta: typing.ClassVar[bool] = False
-        pk: typing.ClassVar[DBField] = None
-        body: typing.ClassVar[DBField] = None
-        many_fields: typing.ClassVar[dict[str, DBManyField]] = None
-        many_to_many_fields: typing.ClassVar[dict[str, DBManyToManyField]] = None
-        fields: typing.ClassVar[dict[str, DBField]] = None
-        lookup_field: typing.ClassVar[str] = None
+        pk: typing.ClassVar[DBField]
+        body: typing.ClassVar[DBField | None] = None
+        many_fields: typing.ClassVar[dict[str, DBManyField] | None] = None
+        many_to_many_fields: typing.ClassVar[dict[str, DBManyToManyField] | None] = None
+        fields: typing.ClassVar[dict[str, DBField]]
+        lookup_field: typing.ClassVar[str | None] = None
+        validate: typing.ClassVar[bool] = VALIDATE_DATA
+        validators: typing.ClassVar[dict[str, TypeAdapter[Any]]]
 
     class ItemGetter:
         def __init__(self, db: DBFactory, table: type[DBTable], field_name: str, pk_value: Any, view: str = None):
@@ -245,6 +257,7 @@ class DBTable(metaclass=MetaTable):
             self._attr_name = field_name
             self._pk_value = pk_value
             self._view = view
+            self._cache = dict()
 
         def __str__(self):
             return self._view or f'{self._table.__qualname__}[{self._pk_value}]'
@@ -256,13 +269,17 @@ class DBTable(metaclass=MetaTable):
             if item == 'pk' or item == self._table.DB.pk.name:
                 return self._pk_value
 
-            related = self._db.query(self._table).select(item).filter(pk=self._pk_value)
-            return related.fetch_value()
+            if item in self._cache:
+                return self._cache[item]
+
+            value = self._db.query(self._table).select(item).filter(pk=self._pk_value).fetch_value()
+            self._cache[item] = value
+            return value
 
         def fetch(self, *fields) -> DBTable:
             actual_fields = fields + ('pk',) if fields else ()
             value = self._db.query(self._table).select(*actual_fields).filter(pk=self._pk_value).fetch_one()
-            setattr(self._table, self._attr_name, value)
+            self._cache |= value.__dict__
             return value
 
     @classmethod
@@ -445,12 +462,24 @@ class DBTable(metaclass=MetaTable):
             field.foreign_table.DB.many_to_many_fields[rev_name].middle_table = TableClass
             field.foreign_table.DB.many_to_many_fields[rev_name].foreign_field = name
 
-    def __init__(self, **initial):
-        """DBTable instance constructor
+    @classmethod
+    def setup_validators(cls):
+        if cls.DB.validate:
+            validators = {}
+            for name, field in cls.DB.fields.items():
+                if field.pk:
+                    adapter = TypeAdapter(field.type | cls, config=PYDANTIC_CONFIG)
+                elif field.ref:
+                    adapter = TypeAdapter(field.type | field.type.DB.pk.type, config=PYDANTIC_CONFIG)
+                else:
+                    adapter = TypeAdapter(field.type, config=PYDANTIC_CONFIG)
+                validators[name] = adapter
+            cls.DB.validators = validators
 
-        Args:
-            **initial: fields initial values
-        """
+            for table in cls.DB.subtables.values():
+                table.setup_validators()
+
+    def __pre_init__(self, **initial):
         self._modified_fields_: set[str] | None = None
         self._db_: DBFactory = initial.pop('_db_', self.DB.db)
         # self.id: Union[None, int, UUID] = None
@@ -458,40 +487,68 @@ class DBTable(metaclass=MetaTable):
         #    if field.many_field:
         #        setattr(self, field_name, set())
         for field_name, field in self.DB.many_fields.items():
-            setattr(self, field_name, set())
+            object.__setattr__(self, field_name, set())
+        if self.DB.pk.name not in initial:
+            object.__setattr__(self, self.DB.pk.name, None)
+        for field_name in self.DB.subtables:
+            object.__setattr__(self, field_name, list())
+        for field_name in self.DB.many_fields:
+            object.__setattr__(self, field_name, list())
+        for field_name in self.DB.many_to_many_fields:
+            object.__setattr__(self, field_name, list())
+
+    def __init__(self, **initial):
+        """DBTable instance constructor
+
+        Args:
+            **initial: fields initial values
+        """
+        self.__pre_init__(**initial)
         for k, v in initial.copy().items():
-            if k.endswith("__view"):
-                continue
-            if self._db_:
-                if field := self.DB.fields.get(k):
-                    if issubclass(field.type, Enum):
-                        setattr(self, k, field.type(v) if v is not None else None)
-                        continue
-                    elif field.ref:
-                        view = initial.pop(f'{k}__view', None)
-                        setattr(self, k, DBTable.ItemGetter(self._db_, field.type, field.name, v.pk if isinstance(v, DBTable) else v, view))
-                        continue
+            if field := self.DB.fields.get(k):
+                if issubclass(field.type, Enum):
+                    setattr(self, k, field.type(v) if v is not None else None)
+                    continue
             # else:
             if k not in self.DB.fields and k not in self.DB.many_fields and k not in self.DB.many_to_many_fields:
                 raise QuazyFieldNameError(f'Wrong field name `{k}` in new instance of `{self.__class__.__name__}`')
 
-            # TODO: validate types
             setattr(self, k, v)
-        if self.DB.pk.name not in initial:
-            self.pk = None
-        for field_name in self.DB.subtables:
-            setattr(self, field_name, list())
-        for field_name in self.DB.many_fields:
-            setattr(self, field_name, list())
-        for field_name in self.DB.many_to_many_fields:
-            setattr(self, field_name, list())
         self._modified_fields_ = set(initial.keys())
+
+    @classmethod
+    def raw(cls, **initial) -> Self:
+        self = cls.__new__(cls)
+        for k, v in initial.copy().items():
+            if k.endswith("__view"):
+                continue
+            if field := self.DB.fields.get(k):
+                if issubclass(field.type, Enum):
+                    object.__setattr__(self, k, field.type(v) if v is not None else None)
+                    continue
+                elif field.ref:
+                    view = initial.pop(f'{k}__view', None)
+                    object.__setattr__(self, k, DBTable.ItemGetter(self._db_, field.type, field.name, v.pk if isinstance(v, DBTable) else v, view))
+                    continue
+            object.__setattr__(self, k, v)
+        return self
 
     def __setattr__(self, key, value):
         if key in self.DB.fields:
-            if self._modified_fields_ is not None:
+            if self.DB.validate:
+                from pydantic import ValidationError
+                try:
+                    value = self.DB.validators[key].validate_python(value)
+                except ValidationError as e:
+                    raise QuazyFieldTypeError(f'Field `{key}` in `{self.__class__.__name__}` has wrong type: {e}')
+            if getattr(self, '_modified_fields_', None) is not None:
                 self._modified_fields_.add(key)
         return super().__setattr__(key, value)
+
+    def __class_getitem__(cls, item: Any):
+        if not cls.DB.db:
+            raise QuazyWrongOperation(f"Table `{cls.__qualname__}` is not assigned to a database")
+        return cls.DB.db.get(cls, item)
 
     @classmethod
     def check_db(cls):

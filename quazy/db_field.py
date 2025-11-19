@@ -115,6 +115,7 @@ class UX:
         hidden:    hide field from UI
         sortable:  allows sorting by field values in tables
         resizable: allows resizing column of field in tables
+        meta:      additional data for UI specific
     """
     field: DBField = data_field(init=False)
     _name: str = ''
@@ -128,6 +129,7 @@ class UX:
     hidden: bool = False
     sortable: bool = True
     resizable: bool = True
+    meta: dict[str, Any] = data_field(default_factory=dict)
 
     def __post_init__(self):
         if self.name and not self.title:

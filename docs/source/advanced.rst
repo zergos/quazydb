@@ -467,3 +467,35 @@ Example
 
     Use renaming for refactoring and misspells correction to avoid deletion and possible data lost.
 
+
+Data validation
+===============
+
+It is possible to enable data validaton with `pydantic` module. Validation is enabled by default if this module is
+installed, otherwise, `QuazyDB` should be installed by specifying this explicitly::
+
+    pip install quazydb[strict]
+
+Validation example:
+
+..  code-block:: python
+
+    class File(DBTable):
+        name: str
+        size: int
+
+    class FileDanger(DBTable):
+        _validate_ = False
+
+        name: str
+        size: int
+
+    File(name="test.txt", size=1024)
+    # this is good
+    File(name="test2.txt", size='1024')
+    # this is also good, because '1024' is a valid number (by powers of `pydantic`)
+    File(name=123, size='1024')
+    # quazy.exceptions.QuazyFieldTypeError: Field `name` in `File` has wrong type: 1 validation error for str
+    #  Input should be a valid string [type=string_type, input_value=123, input_type=int]
+    FileDanger(name=123, size='1024')
+    # this is ok (take your own care for saving to database)

@@ -33,6 +33,9 @@ Documentation = "https://quazydb.readthedocs.io/en/latest/"
 Repository = "https://github.com/zergos/quazydb.git"
 Issues = "https://github.com/zergos/quazydb/issues"
 
+[project.optional-dependencies]
+strict = ["pydantic"]
+
 [tool.setuptools]
 package-dir = {quazy = "quazy"}
 

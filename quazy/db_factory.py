@@ -144,6 +144,8 @@ class DBFactory:
             table.resolve_types(globalns)
         for table in tables:
             table.resolve_types_many(lambda t: self.bind(t, schema))
+        for table in tables:
+            table.setup_validators()
 
     def unbind(self, schema: str = "public"):
         """Unbind all tables
@@ -528,7 +530,7 @@ class DBFactory:
                 if as_dict:
                     row_factory = dict_row
                 elif query.fetch_objects:
-                    row_factory = class_row(lambda **kwargs: query.table_class(_db_=self, **kwargs))
+                    row_factory = class_row(lambda **kwargs: query.table_class.raw(_db_=self, **kwargs))
                 else:
                     row_factory = namedtuple_row
                 with conn.cursor(binary=True, row_factory=row_factory) as curr:
