@@ -19,7 +19,7 @@ Use dataclasses
 
 Why don't use typing templates from python bundled `dataclasses <https://docs.python.org/3/library/dataclasses.html>`__?
 
-.. code-block::
+.. code-block:: python
 
    class Measure(DBTable):
        name: str
@@ -37,7 +37,7 @@ Subclasses
 
 It is very handy to declare strictly one-two-many related tables as a subclass.
 
-.. code-block::
+.. code-block:: python
 
    class Product(DBTable):
        name: str
@@ -54,7 +54,7 @@ Many-to-many
 
 Let's make many-to-many relation definition simpler:
 
-.. code-block::
+.. code-block:: python
 
    class User(NamedTable):
        apps: ManyToMany[App]
@@ -65,7 +65,7 @@ Let's make many-to-many relation definition simpler:
 
 or similar for one-to-many relation:
 
-.. code-block::
+.. code-block:: python
 
    class User(NamedTable):
        app: 'App'
@@ -79,7 +79,7 @@ JSON fields
 
 I like simple migrations for object-oriented databases. So, let's decribe JSONb content fields explicitly.
 
-.. code-block::
+.. code-block:: python
 
    class Journal(NamedTable):
        body: FieldBody
@@ -95,7 +95,7 @@ Polymorphic entities
 
 I like to store similar entities in one table, but separate logically.
 
-.. code-block::
+.. code-block:: python
 
    class Catalog(DBTable):
        _extendable_ = True
@@ -114,7 +114,7 @@ Enumerated types
 
 I like `Enum`, `IntEnum` and `StrEnum` features.
 
-.. code-block::
+.. code-block:: python
 
    class Journal(NamedTable):
        class ContentClass(IntEnum):
@@ -133,7 +133,7 @@ Lambdas way
 
 Select fields by names or calculate by `lambdas`:
 
-..  code-block::
+..  code-block:: python
 
     query = db.query(Item).select("name", "base_unit", unit=lambda x: x.base_unit.name)
 
@@ -141,7 +141,7 @@ Select fields by names or calculate by `lambdas`:
 
 Filter by lambdas:
 
-..  code-block::
+..  code-block:: python
 
     last_date = datetime.now() - timedelta(days=7)
     query = db.query(News).filter(lambda x: x.created_at >= last_date).select('title')
@@ -155,7 +155,7 @@ Precompiled queries
 
 Let's use Postgres binary protocol to precompile and reuse queries.
 
-..  code-block::
+..  code-block:: python
 
     with db.query() as q, q.get_scheme() as s: # this block runs once, query `q` is cached for miltiple run
         q.reuse()
@@ -177,7 +177,7 @@ Subqueries
 
 Reuse initial query for additional results for easy
 
-..  code-block::
+..  code-block:: python
 
     with db.query() as q2:
         sub = q2.with_query(q)
@@ -190,7 +190,7 @@ Queries result types
 Let's collect information about query result fields before actual execution.
 We would really need it to prepare user intefrace in advance.
 
-..  code-block::
+..  code-block:: python
 
     fields: list[DBField] = query.describe()
     for f in fields:
@@ -202,7 +202,7 @@ Migrations
 
 Do you have growing database? No problem, flexible migrations bundled.
 
-..  code-block::
+..  code-block:: python
 
     db = DBFactory.postgres(conninfo="postgresql://quazy:quazy@localhost/quazy")
     db.bind_module()
@@ -215,9 +215,24 @@ IDE friendly
 
 Just make `stub` file to provide little help to your IDE and other works will be performed by magic Generics.
 
-..  code-block::
+..  code-block:: python
 
     with open("test_quazy.pyi", "wt") as f:
         f.write(gen_stub(db))
 
 It redefines all implicit fields explicitly and adds constructors.
+
+
+Data validation
+===============
+
+Make sure you put valid datas in your tables before database engine becomes confused.
+
+..  code-block:: python
+
+    class User(DBTable):
+        name: str
+
+    User(name=123)
+    # quazy.exceptions.QuazyFieldTypeError: Field `name` in `User` has wrong type: 1 validation error for str
+    #  Input should be a valid string [type=string_type, input_value=123, input_type=int]
