@@ -162,6 +162,11 @@ It is also possible specify "reverse" field name explicitly.
     for t in u.tasks_received:
         print(t.title)
 
+    # alternativery via `fetch`
+    u = User.get(name="John")
+    for t in u.tasks_received.fetch():
+        print(t.title)
+
 Many-to-many relations
 ----------------------
 

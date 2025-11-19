@@ -4,6 +4,7 @@ import types
 import re
 import sys
 import inspect
+import itertools
 
 try:
     from pydantic import TypeAdapter, ConfigDict
@@ -23,6 +24,8 @@ if typing.TYPE_CHECKING:
     from .db_query import DBQuery, DBQueryField, DBSQL, FDBSQL
 
 __all__ = ['DBTable']
+
+T = typing.TypeVar('T', bound='DBTable')
 
 def camel2snake(name: str) -> str:
     return camel2snake.r.sub(r'_\1', name).lower()
@@ -250,8 +253,8 @@ class DBTable(metaclass=MetaTable):
         validate: typing.ClassVar[bool] = VALIDATE_DATA
         validators: typing.ClassVar[dict[str, TypeAdapter[Any]]]
 
-    class ItemGetter:
-        def __init__(self, db: DBFactory, table: type[DBTable], field_name: str, pk_value: Any, view: str = None):
+    class ItemGetter(typing.Generic[T]):
+        def __init__(self, db: DBFactory, table: type[T], field_name: str, pk_value: Any, view: str = None):
             self._db = db
             self._table = table
             self._attr_name = field_name
@@ -276,11 +279,24 @@ class DBTable(metaclass=MetaTable):
             self._cache[item] = value
             return value
 
-        def fetch(self, *fields) -> DBTable:
+        def fetch(self, *fields) -> T:
             actual_fields = fields + ('pk',) if fields else ()
             value = self._db.query(self._table).select(*actual_fields).filter(pk=self._pk_value).fetch_one()
             self._cache |= value.__dict__
             return value
+
+    class ListGetter(list, typing.Generic[T]):
+        def __init__(self, db: DBFactory, table: type[DBTable], field_name: str, pk_value: Any):
+            self._db = db
+            self._table = table
+            self._field_name = field_name
+            self._pk_value = pk_value
+            super().__init__()
+
+        def fetch(self, *fields) -> list[T]:
+            actual_fields = fields + ('pk',) if fields else ()
+            self[:] = self._db.query(self._table).select(*actual_fields).filter(lambda x: getattr(x, self._field_name) == self._pk_value).fetch_all()
+            return self
 
     @classmethod
     def resolve_types(cls, globalns):
@@ -482,20 +498,26 @@ class DBTable(metaclass=MetaTable):
     def __pre_init__(self, **initial):
         self._modified_fields_: set[str] | None = None
         self._db_: DBFactory = initial.pop('_db_', self.DB.db)
-        # self.id: Union[None, int, UUID] = None
-        # for field_name, field in self.fields.items():
-        #    if field.many_field:
-        #        setattr(self, field_name, set())
+        self_id = initial.get(self.DB.pk.name, None)
+        object.__setattr__(self, self.DB.pk.name, None)
+
         for field_name, field in self.DB.many_fields.items():
-            object.__setattr__(self, field_name, set())
-        if self.DB.pk.name not in initial:
-            object.__setattr__(self, self.DB.pk.name, None)
-        for field_name in self.DB.subtables:
-            object.__setattr__(self, field_name, list())
-        for field_name in self.DB.many_fields:
-            object.__setattr__(self, field_name, list())
-        for field_name in self.DB.many_to_many_fields:
-            object.__setattr__(self, field_name, list())
+            if self_id is not None:
+                object.__setattr__(self, field_name, DBTable.ListGetter(self._db_, field.foreign_table, field.foreign_field, self_id))
+            else:
+                object.__setattr__(self, field_name, list())
+
+        for field_name, subtable in self.DB.subtables.items():
+            if self_id is not None:
+                object.__setattr__(self, field_name, DBTable.ListGetter(self._db_, subtable, self.DB.table, self_id))
+            else:
+                object.__setattr__(self, field_name, list())
+
+        for field_name, field in self.DB.many_to_many_fields.items():
+            if self_id is not None:
+                object.__setattr__(self, field_name, DBTable.ListGetter(self._db_, field.foreign_table, field.foreign_field, self_id))
+            else:
+                object.__setattr__(self, field_name, list())
 
     def __init__(self, **initial):
         """DBTable instance constructor
@@ -519,6 +541,7 @@ class DBTable(metaclass=MetaTable):
     @classmethod
     def raw(cls, **initial) -> Self:
         self = cls.__new__(cls)
+        self.__pre_init__(**initial)
         for k, v in initial.copy().items():
             if k.endswith("__view"):
                 continue
@@ -588,27 +611,11 @@ class DBTable(metaclass=MetaTable):
             selected_field_name: any related field name to load, if not specified, all related fields will be loaded.
         """
         self.check_db()
-        for field_name, table in self.DB.subtables.items():
-            if selected_field_name is None or selected_field_name == field_name:
-                q = self._db_.query(table).filter(lambda x: getattr(x, table.DB.owner.DB.table) == self)
-                setattr(self, field_name, q.fetch_all())
-                if selected_field_name is not None:
-                    return self
-
-        for field_name, many_field in self.DB.many_fields.items():
-            if selected_field_name is None or selected_field_name == field_name:
-                q = self._db_.query(many_field.foreign_table).filter(lambda x: getattr(x, many_field.foreign_field) == self)
-                setattr(self, field_name, q.fetch_all())
-                if selected_field_name is not None:
-                    return self
-
-        for field_name, many_to_many_field in self.DB.many_to_many_fields.items():
-            if selected_field_name is None or many_to_many_field == selected_field_name:
-                q = self._db_.query(many_to_many_field.foreign_table).filter(
-                    lambda x: getattr(x, many_to_many_field.foreign_field).pk == self)
-                setattr(self, field_name, q.fetch_all())
-                if selected_field_name is not None:
-                    return self
+        if selected_field_name is not None:
+            getattr(self, selected_field_name).fetch()
+        else:
+            for field_name in itertools.chain(self.DB.subtables, self.DB.many_fields, self.DB.many_to_many_fields):
+                getattr(self, field_name).fetch()
 
         return self
 

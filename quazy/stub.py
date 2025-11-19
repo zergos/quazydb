@@ -86,21 +86,23 @@ def gen_stub(db: DBFactory, schema: str = None) -> str:
                 field_type = f'{type_name(field.type)}'
             elif not field.required:
                 field_type = f'{type_name(field.type)} | None'
+            elif field.ref:
+                field_type = f'DBTable.ItemGetter[{field.type.__qualname__}] | {field.type.__qualname__}'
             else:
                 field_type = type_name(field.type)
             field_chunks.append(f'\t{name}: {field_type}')
             var_chunks.append(f'{name}: {type_name(field.type)} = None')
 
         for name, field in table.DB.many_fields.items():
-            field_chunks.append(f'\t{name}: list["{field.foreign_table.__qualname__}"]')
+            field_chunks.append(f'\t{name}: DBTable.ListGetter["{field.foreign_table.__qualname__}"]')
             var_chunks.append(f'{name}: list["{field.foreign_table.__qualname__}"] = None')
 
         for name, field in table.DB.many_to_many_fields.items():
-            field_chunks.append(f'\t{name}: list["{field.foreign_table.__qualname__}"]')
+            field_chunks.append(f'\t{name}: DBTable.ListGetter["{field.foreign_table.__qualname__}"]')
             var_chunks.append(f'{name}: list["{field.foreign_table.__qualname__}"] = None')
 
         for name, field in table.DB.subtables.items():
-            field_chunks.append(f'\t{name}: list["{field.__qualname__}"]')
+            field_chunks.append(f'\t{name}: DBTable.ListGetter["{field.__qualname__}"]')
             var_chunks.append(f'{name}: list["{field.__qualname__}"] = None')
 
         if not table.DB.meta:
