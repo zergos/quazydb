@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 import inspect
 
-from sphinx.util.inspect import isclass
-
 from .db_types import *
 from .exceptions import *
 

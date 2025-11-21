@@ -1,6 +1,8 @@
 Getting started
 ###############
 
+**Python 3.10+** is required.
+
 Install the module::
 
     pip install quazydb

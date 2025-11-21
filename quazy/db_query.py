@@ -468,7 +468,7 @@ class DBScheme(SimpleNamespace):
 
 
 if typing.TYPE_CHECKING:
-    type FDBSQL = DBSQL | Callable[[SimpleNamespace], DBSQL] | str | int | DBConditionField
+    FDBSQL = DBSQL | Callable[[SimpleNamespace], DBSQL] | str | int | DBConditionField
 
 
 class DBQuery(typing.Generic[T]):
