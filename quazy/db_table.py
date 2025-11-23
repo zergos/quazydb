@@ -6,6 +6,9 @@ import sys
 import inspect
 import itertools
 
+if sys.version_info >= (3, 14):
+    import annotationlib
+
 try:
     from pydantic import TypeAdapter, ConfigDict
     VALIDATE_DATA = True
@@ -33,6 +36,11 @@ def camel2snake(name: str) -> str:
 camel2snake.r = re.compile(
     '((?<=[a-z0-9])[A-Z]|(?!^)(?<!_)[A-Z](?=[a-z]))')  # tnx to https://stackoverflow.com/questions/1175208/elegant-python-function-to-convert-camelcase-to-snake-case
 
+def get_annotated_id(t: str) -> str | None:
+    groups = get_annotated_id.r.match(t)
+    return groups and groups.group(2)
+
+get_annotated_id.r = re.compile(r'''^(.*?)(Many|ManyToMany|Property|FieldCID)\[(.+?)]$''')
 
 class MetaTable(type):
     db_base_class: type[DBTable.DB]
@@ -54,7 +62,10 @@ class MetaTable(type):
         if 'title' not in spec_attrs:
             spec_attrs['title'] = clsname
 
-        DB = typing.cast(type[DBTable.DB], super().__new__(cls, clsname + 'DB', (cls.db_base_class,), spec_attrs))
+        if 'validate' in spec_attrs and spec_attrs['validate'] is True and not VALIDATE_DATA:
+            raise QuazyError('`validate` attribute is set to `True`, but `pydantic` is not installed')
+
+        DB = typing.cast(type[DBTable.DB], type(clsname + 'DB', (cls.db_base_class,), spec_attrs))
         attrs['DB'] = DB
 
         DB.many_fields = dict()
@@ -79,10 +90,21 @@ class MetaTable(type):
 
         DB.subtables = dict()
 
-        if '_discriminator_' not in attrs:
+        if 'discriminator' not in spec_attrs:
             DB.discriminator = attrs['__qualname__'] if DB.cid else None
 
-        new_cls = super().__new__(cls, clsname, bases, attrs, **kwargs)
+        new_cls = super().__new__(cls, attrs['__qualname__'], bases, attrs, **kwargs)
+        """
+        if sys.version_info >= (3, 14):
+            from annotationlib import get_annotate_from_class_namespace, call_annotate_function, Format
+            annotate_func = get_annotate_from_class_namespace(attrs)
+            def wrapped_annotate(format):
+                import annotationlib
+                annos = call_annotate_function(annotate_func, format, owner=new_cls)
+                return {key: value for key, value in annos.items() if key in DB.fields}
+            if annotate_func:
+                new_cls.__annotate__ = wrapped_annotate
+        """
         return new_cls
 
     @staticmethod
@@ -94,29 +116,34 @@ class MetaTable(type):
         fields = MetaTable.collect_bases_fields(bases, DB)
 
         has_pk = False
-        for name, t in attrs.get('__annotations__', {}).items():  # type: str, type
+        if sys.version_info < (3, 14):
+            annotations = attrs.get('__annotations__', {})
+        else:
+            annotate_func = annotationlib.get_annotate_from_class_namespace(attrs)
+            annotations = annotationlib.call_annotate_function(annotate_func, annotationlib.Format.FORWARDREF) if annotate_func else {}
+
+        for name, t in annotations.items():  # type: str, type
             if name.startswith('_'):
                 continue
             field = attrs.pop(name, DBField())
             if isinstance(field, DBField):
                 field.prepare(name)
-                if not field.type:
-                    field.type = t
                 if field.pk:
                     has_pk = True
                     DB.pk = field
-                elif t is FieldCID or isinstance(t, str) and t.startswith(FieldCID.__name__) or field.cid:
+                elif (isinstance(t, typing._AnnotatedAlias) and t.__metadata__[0] == 'FieldCID'
+                      or isinstance(t, str) and get_annotated_id(t) == 'FieldCID'):
                     # check CID
                     if not DB.extendable:
                         raise QuazyFieldTypeError(
-                            f'Table `{attrs["__qualname__"]}` is not declared with _extendable_ attribute')
+                            f'Table `{attrs["__qualname__"]}` is not declared with `_extendable_` attribute')
                     elif DB.cid:
                         raise QuazyFieldTypeError(
                             f'Table `{attrs["__qualname__"]}` has CID field already inherited from extendable')
 
                     field.cid = True
                     DB.cid = field
-                elif t is FieldBody or t == FieldBody.__name__ or field.body:
+                elif t is FieldBody or t == 'FieldBody' or field.body:
                     if DB.body:
                         raise QuazyFieldTypeError(f'Table `{attrs["__qualname__"]}` has body field already')
 
@@ -125,7 +152,6 @@ class MetaTable(type):
             else:
                 field = DBField(default=field)
                 field.prepare(name)
-                field.type = t
                 field.required = True
 
             fields[name] = field
@@ -133,7 +159,7 @@ class MetaTable(type):
         # check seed proper declaration
         if DB.cid and not DB.extendable:
             raise QuazyFieldTypeError(
-                f'CID field is declared, but table `{attrs["__qualname__"]}` is not declared with `extendable` attribute')
+                f'CID field is declared, but table `{attrs["__qualname__"]}` is not declared with `_extendable_` attribute')
 
         if not has_pk:
             pk = DBField(pk=True)
@@ -304,11 +330,18 @@ class DBTable(metaclass=MetaTable):
 
         :meta private:"""
         # eval annotations
-        for name, t in typing.get_type_hints(cls, globals() | globalns, locals()).items():
+        if sys.version_info >= (3, 14):
+            annotations = annotationlib.get_annotations(cls, format=annotationlib.Format.FORWARDREF)
+        else:
+            annotations = cls.__annotations__
+
+        type_hints = typing.get_type_hints(cls, globalns)
+        for name, t in type_hints.items():
             if name not in cls.DB.fields:  # or cls.fields[name].type is not None:
                 continue
             field: DBField = cls.DB.fields[name]
-            if cls.resolve_type(t, field, globalns):
+            annotation = annotations.get(name, None)
+            if cls.resolve_type(t, annotation, field, globalns):
                 setattr(cls, name, list())
                 del cls.DB.fields[name]
 
@@ -333,16 +366,12 @@ class DBTable(metaclass=MetaTable):
                 t.resolve_types(globalns)
 
     @classmethod
-    def resolve_type(cls, t: Union[type, typing._GenericAlias], field: DBField, globalns) -> bool | None:
+    def resolve_type(cls, t: type, ta: type | None, field: DBField, globalns) -> bool | None:
         """Resolve field types from annotations
 
         :meta private:"""
-        if t in KNOWN_TYPES or inspect.isclass(t) and issubclass(t, Enum):
-            # Base type
-            field.type = t
-            return
-
-        elif inspect.isclass(t) and issubclass(t, DBField):
+        if inspect.isclass(t) and issubclass(t, DBField):
+            # import custom field attributes
             for k, v in t.__dict__.items():
                 if k.startswith('_'):
                     continue
@@ -352,67 +381,46 @@ class DBTable(metaclass=MetaTable):
                             setattr(field.ux, kk, vv)
                 else:
                     setattr(field, k, v)
-            return
 
-        elif hasattr(t, '__origin__'):  # Union cannot be used with isinstance()
-            if t.__origin__ is typing.Union and len(t.__args__) == 2 and t.__args__[1] is type(None):
-                # 'Optional' annotation
+        elif (ta is not None and
+              (isinstance(ta, typing._AnnotatedAlias) and (meta_name:=ta.__metadata__[0]) or
+               isinstance(ta, str) and (meta_name:=get_annotated_id(ta)) is not None)):
+            if meta_name == 'FieldCID':
+                field.type = t
+            elif meta_name == 'Property':
+                field.property = True
                 field.required = False
-                DBTable.resolve_type(t.__args__[0], field, globalns)
-                return
-
-            elif t.__origin__ in [Many, ManyToMany] and len(t.__args__) == 1:
-                # resolve Many later
-                t2 = t.__args__[0]
-                if isinstance(t2, typing.ForwardRef):
-                    field_type = t2._evaluate(globalns, {})
-                elif inspect.isclass(t2) and issubclass(t2, DBTable):
-                    field_type = t2
-                else:
-                    raise QuazyFieldTypeError(f'Many type should be reference to another DBTable')
-                if t.__origin__ is Many:
+                cls.resolve_type(t, None, field, globalns)
+            elif meta_name in ('Many', 'ManyToMany'):
+                field_type = t.__args__[0]
+                if not inspect.isclass(field_type) or not issubclass(field_type, DBTable):
+                    raise QuazyFieldTypeError(f'Many type `{t}` should be referenced to another DBTable')
+                if meta_name == 'Many':
                     cls.DB.many_fields[field.name] = DBManyField(field_type, field.reverse_name)
                 else:
                     cls.DB.many_to_many_fields[field.name] = DBManyToManyField(field_type, field.reverse_name)
                 return True
 
-            elif t.__origin__ is FieldCID:
-                # Field CID declaration
-                field.type = t.__args__[0] if t.__args__ else str
-                return
-
-            elif t.__origin__ is Property:
-                field.property = True
+        elif isinstance(t, typing._UnionGenericAlias) or isinstance(t, types.UnionType):
+            if len(args:=typing.get_args(t)) == 2 and args[1] is type(None):
+                # 'Optional' annotation
                 field.required = False
-                cls.resolve_type(t.__args__[0], field, globalns)
-                return
-
-        elif isinstance(t, types.UnionType):
-            if len(t.__args__) == 2 and t.__args__[1] is type(None):
-                field.required = False
-                DBTable.resolve_type(t.__args__[0], field, globalns)
-                return
-
-        elif t is FieldCID:
-            field.type = str
-            return
+                DBTable.resolve_type(args[0], None, field, globalns)
 
         elif t is FieldBody:
             field.type = dict
-            return
-
-        elif isinstance(t, typing.ForwardRef):
-            field.ref = True
-            field.type = t._evaluate(globalns, {})
-            return
 
         elif inspect.isclass(t) and issubclass(t, DBTable):
             # Foreign key
             field.ref = True
             field.type = t
-            return
 
-        raise QuazyFieldTypeError(f'type {t} is not supported as field type')
+        elif t in KNOWN_TYPES or inspect.isclass(t) and issubclass(t, Enum):
+            # Base type
+            field.type = t
+
+        else:
+            raise QuazyFieldTypeError(f'type `{t}` is not supported as field type for `{cls.__qualname__}.{field.name}`')
 
     @classmethod
     def resolve_types_many(cls, add_middle_table: Callable[[type[DBTable]], Any]):
@@ -424,7 +432,7 @@ class DBTable(metaclass=MetaTable):
             if field.ref:
                 rev_name = field.reverse_name or cls.DB.snake_name
                 if rev_name in field.type.DB.many_fields:
-                    if field.type.DB.many_fields[rev_name].source_table is not cls:
+                    if field.type.DB.many_fields[rev_name].foreign_table is not cls:
                         raise QuazyFieldNameError(
                             f'Cannot reuse Many field in table `{field.type.__name__}` with name `{rev_name}`, it is associated with table `{field.type.DB.many_fields[rev_name].source_table.__name__}`. Set different `reverse_name`.')
                     field.type.DB.many_fields[rev_name].foreign_field = name
@@ -463,6 +471,10 @@ class DBTable(metaclass=MetaTable):
                                                     type(middle_table_name, (DBTable,), {
                                                         '__qualname__': middle_table_name,
                                                         '__module__': cls.__module__,
+                                                        '__annotate_func__': lambda f: {
+                                                            f1.name: f1.type,
+                                                            f2.name: f2.type
+                                                        },
                                                         '__annotations__': {
                                                             f1.name: f1.type,
                                                             f2.name: f2.type
@@ -471,6 +483,7 @@ class DBTable(metaclass=MetaTable):
                                                         f1.name: f1,
                                                         f2.name: f2,
                                                     }))
+
             add_middle_table(TableClass)
 
             field.middle_table = TableClass
@@ -568,7 +581,7 @@ class DBTable(metaclass=MetaTable):
                 self._modified_fields_.add(key)
         return super().__setattr__(key, value)
 
-    def __class_getitem__(cls, item: Any):
+    def __class_getitem__(cls, item: Any) -> Self:
         if not cls.DB.db:
             raise QuazyWrongOperation(f"Table `{cls.__qualname__}` is not assigned to a database")
         return cls.DB.db.get(cls, item)

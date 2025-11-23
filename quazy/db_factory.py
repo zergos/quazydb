@@ -315,6 +315,7 @@ class DBFactory:
                 '__qualname__': root_class.__qualname__+"Combined",
                 '__module__': root_class.__module__,
                 '__annotations__': annotations,
+                '__annotate_func__': lambda f: annotations,
                 '_db_': self,
                 '_table_': root_class.DB.table,
                 '_extendable_': True,

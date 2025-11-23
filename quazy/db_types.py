@@ -47,38 +47,14 @@ TYPE_MAP = {
 }
 
 
-T = typing.TypeVar('T')
+T = typing.TypeVar('T', bound='DBTable')
 
-
-class Many(typing.Generic[T]):
-    def append(self, item: T): ...
-
-    def remove(self, item: T): ...
-
-    def __getitem__(self, item) -> T: ...
-
-    def __setitem__(self, key, value: T): ...
-
-    def __iter__(self) -> T: ...
-
-
-class ManyToMany(typing.Generic[T]):
-    def __getitem__(self, item) -> T: ...
-
-    def __setitem__(self, key, value: T): ...
-
-    def __iter__(self) -> T: ...
-
-
-class FieldCID(typing.Generic[T]):
-    pass
-
+Many = typing.Annotated[list[T], "Many"]
+ManyToMany = typing.Annotated[list[T], "ManyToMany"]
+FieldCID = typing.Annotated[T, 'FieldCID']
+Property = typing.Annotated[T, 'Property']
 
 class FieldBody:
-    pass
-
-
-class Property(typing.Generic[T]):
     pass
 
 class Text(DBField, str):
@@ -94,8 +70,7 @@ def db_type_name(t: type) -> str:
             return 'int'
         if issubclass(t, StrEnum):
             return 'str'
-    else:
-        raise TypeError(f"Unsupported field type {t}")
+    raise TypeError(f"Unsupported field type {t}")
 
 
 def db_type_by_name(name: str) -> type | str:

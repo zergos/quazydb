@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import random
 import typing
 from enum import IntEnum
@@ -84,7 +82,7 @@ class GroupCatalog(Catalog):
 
 
 class User(NamedTable):
-    apps: ManyToMany[App]
+    apps: ManyToMany['App']
 
 
 class App(NamedTable):
@@ -102,7 +100,7 @@ class Journal(NamedTable):
     price: Property[float]
     group: Property[GroupCatalog]
     pub_date: Property[datetime]
-    cc: Journal.ContentClass
+    cc: 'Journal.ContentClass'
 
 
 def configure_logging():

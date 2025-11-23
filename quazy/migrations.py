@@ -245,6 +245,7 @@ def compare_schema(db: DBFactory, rename_list: list[tuple[str, str]] | None = No
                     '__qualname__': f.type.__qualname__,
                     '__module__': f.type.__module__,
                     '__annotations__': annotations,
+                    '__annotate_func__': lambda f: annotations,
                     '_table_': f.type.DB.table,
                     '_schema_': f.type.DB.schema,
                     '_extendable_': f.type.DB.extendable,

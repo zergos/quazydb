@@ -1,7 +1,8 @@
 Getting started
 ###############
 
-**Python 3.10+** is required.
+**Python 3.10+** is supported.
+Including new **Python 3.14** type hinting changes.
 
 Install the module::
 
