@@ -23,4 +23,10 @@ class QuazyNotSupported(QuazyError):
 
 
 class QuazyWrongOperation(QuazyError):
-    """You are trying to use something wrong way"""
+    """You are trying to use something the wrong way"""
+
+
+class QuazyFrozen(QuazyError):
+    """Trying to modify the frozen query"""
+    def __init__(self, msg: str):
+        super().__init__(f"{msg}. Query is frozen")

@@ -526,8 +526,11 @@ class DBFactory:
         """
         with self.connection() as conn:
             if not isinstance(query, str):
-                sql = self._trans.select(query)
-                if self._debug_mode: print(sql)
+                if not query.is_frozen:
+                    sql = self._trans.select(query)
+                    if self._debug_mode: print(sql)
+                else:
+                    sql = query.frozen_sql
                 if as_dict:
                     row_factory = dict_row
                 elif query.fetch_objects:

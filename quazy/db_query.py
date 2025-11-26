@@ -512,6 +512,7 @@ class DBQuery(typing.Generic[T]):
         self.window: tuple[int | None, int | None] = (None, None)
         self.is_distinct: bool = False
         self.with_queries: list[DBWithClause] = []
+        self.frozen_sql: str | None = None
         self.args: dict[str, Any] = {}
         self._arg_counter: int = 0
         self._hash: Optional[Hashable] = None
@@ -531,6 +532,10 @@ class DBQuery(typing.Generic[T]):
 
             if not for_copy and self.table_class.DB.extendable:
                 self.filters.append(getattr(table_space, self.table_class.DB.cid.name) == self.arg(self.table_class.DB.discriminator))
+
+    def _check_frozen(self):
+        if self.frozen_sql is not None:
+            raise QuazyFrozen
 
     def __copy__(self):
         obj = object.__new__(DBQuery)
@@ -723,6 +728,7 @@ class DBQuery(typing.Generic[T]):
         Returns:
             `DBQuery` for chain calls
         """
+        self._check_frozen()
         if not field_names and not fields:
             return self
         if self.fetch_objects:
@@ -749,6 +755,7 @@ class DBQuery(typing.Generic[T]):
         Returns:
             `DBQuery` for chain calls
         """
+        self._check_frozen()
         self.fetch_objects = False
         self.fields['*'] = DBSQL(self, '*')
         return self
@@ -759,6 +766,7 @@ class DBQuery(typing.Generic[T]):
         Returns:
             `DBQuery` for chain calls
         """
+        self._check_frozen()
         self._check_fields()
         return self
 
@@ -767,6 +775,7 @@ class DBQuery(typing.Generic[T]):
 
         Add a `DISTINCT` clause to a `SELECT ...` statement.
         """
+        self._check_frozen()
         self.is_distinct = True
         return self
 
@@ -780,6 +789,7 @@ class DBQuery(typing.Generic[T]):
         Returns:
             `DBQuery` for chain calls
         """
+        self._check_frozen()
         for field in fields:
             self.sort_list.append(self.resolve(field) if not desc else self.resolve(field).postfix('DESC'))
         return self
@@ -805,6 +815,7 @@ class DBQuery(typing.Generic[T]):
         Returns:
             `DBQuery` for chain calls
         """
+        self._check_frozen()
         if _expression is not None:
             sql = self.resolve(_expression)
             if sql.aggregated:
@@ -837,6 +848,7 @@ class DBQuery(typing.Generic[T]):
         Returns:
             `DBQuery` for chain calls
         """
+        self._check_frozen()
         if _expression is not None:
             sql = ~self.resolve(_expression)
             if sql.aggregated:
@@ -862,6 +874,7 @@ class DBQuery(typing.Generic[T]):
         Returns:
             `DBQuery` for chain calls
         """
+        self._check_frozen()
         self.group_filters.append(self.resolve(expression))
         return self
 
@@ -876,6 +889,7 @@ class DBQuery(typing.Generic[T]):
         Returns:
             `DBQuery` for chain calls
         """
+        self._check_frozen()
         for field in fields:
             self.groups.append(self.resolve(field))
         return self
@@ -885,6 +899,7 @@ class DBQuery(typing.Generic[T]):
 
         This is analogue to `SELECT a, b, c FROM table OFFSET ... LIMIT ...` statement.
         """
+        self._check_frozen()
         self.window = (offset, limit)
         return self
 
@@ -1137,6 +1152,7 @@ class DBQuery(typing.Generic[T]):
                 q = Chained.chained("index", "next", 1)
                 print(q.fetch_all())
         """
+        self._check_frozen()
         if self.table_class is None:
             raise QuazyWrongOperation("Query is not bound to a table")
         if id_name not in self.table_class.DB.fields:
@@ -1147,3 +1163,17 @@ class DBQuery(typing.Generic[T]):
             self.select(id_name, next_name) # at least `next_name` field must be selected
         self.chained_opts = DBChainedFilter(id_name, next_name, self.arg(start_value))
         return self
+
+    def freeze(self) -> DBQuery[T]:
+        """Build SQL and freeze the query object to prevent further changes"""
+        self._check_frozen()
+        self._check_fields()
+        self.frozen_sql = self.db._trans.select(self)
+        if self.db._debug_mode:
+            print(self.frozen_sql)
+        return self
+
+    @property
+    def is_frozen(self) -> bool:
+        """Whether the query object is frozen"""
+        return self.frozen_sql is not None

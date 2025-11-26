@@ -208,6 +208,16 @@ Single table
         q8["name"] = n
         print(q8.fetch_one())
 
+    # freeze quieries
+    q9 = SomeTable.query()
+    q9.filter(name=q9.var("name")).freeze()
+
+    # at this point SQL code is statically generated and query is restricted against changes
+
+    for n in ('One', 'Two'):
+        q9["name"] = n
+        print(q9.fetch_one())
+
 
 Multiple tables
 ---------------
