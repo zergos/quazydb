@@ -504,3 +504,49 @@ Validation example:
     #  Input should be a valid string [type=string_type, input_value=123, input_type=int]
     FileDanger(name=123, size='1024')
     # this is ok (take your own care for saving to database)
+
+
+Evaluated fields
+================
+
+There is an opportunity to create evaluated fields, just in case storing is not needed.
+
+..  code-block:: python
+
+    class Test(DBTable):
+    a: int
+    b: int
+
+    # regular field, defined as property for runtime evaluation
+    @property
+    def c(self) -> int:
+        return self.a + self.b
+
+    # field, defined as static method for SQL evaluation, always postfixed with `__view`
+    # exposed with query builder only
+    @staticmethod
+    def c__view(x: DBQueryField[Test]) -> DBQuery:
+        return x.a + x.b
+
+    # another field, defined as property, but without mapped view function
+    # if this expression is query compatible - query builder will call it implicitly
+    @property
+    def d(self) -> int:
+        return self.a * self.b
+
+    t = Test(a=1, b=2).save()
+    print(t.c, t.d)
+
+    # `c` is selected by `c__view` method and `d` is selected by property expression
+    t2 = Test.select("c", "d").filter(lambda x: (x.c == 3) & (x.d == 2)).fetch_one()
+    print(t2.c, t2.d)
+
+There is SQL generated::
+
+    SELECT
+        "test".a+"test".b AS "c",
+        "test".a*"test".b AS "d"
+    FROM "public"."test" AS "test"
+    WHERE
+        "test".a+"test".b=%(_arg_1)s AND "test".a*"test".b=%(_arg_2)s
+

@@ -95,6 +95,11 @@ class DBQueryField(typing.Generic[T]):
                           f'"{join_path_middle}".{many_to_many_field.foreign_table.DB.table} = "{{join_alias}}".{many_to_many_field.foreign_table.DB.pk.column}')
             return DBQueryField(self._query, many_to_many_field.foreign_table, join_alias, join)
 
+        elif (f:=getattr(self._table, f'{item}__view', None)) and callable(f):
+            return f(self)
+        elif (f:=getattr(self._table, item, None)) and isinstance(f, property):
+            return f.fget(self)
+
         raise QuazyFieldNameError(f'field `{item}` is not found in `{DB.table}`')
     
     def __getitem__(self, item):
@@ -654,8 +659,13 @@ class DBQuery(typing.Generic[T]):
             if not expr:
                 raise QuazyFieldTypeError('Expression is empty string')
             if not is_expression_canonical(expr):
-                if isinstance(scheme, DBQueryField) and expr in scheme:
-                    return getattr(scheme, expr)
+                if isinstance(scheme, DBQueryField):
+                    if expr in scheme:
+                        return getattr(scheme, expr)
+                    elif (f:=getattr(self.table_class, f'{expr}__view', None)) and callable(f):
+                        return f(scheme)
+                    elif (f:=getattr(self.table_class, expr, None)) and isinstance(f, property):
+                        return f.fget(scheme)
                 return DBSQL(self, expr)
             chunks = expr.split('.')
             sub_scheme = getattr(scheme, chunks[0])
