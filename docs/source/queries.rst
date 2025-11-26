@@ -190,6 +190,10 @@ Single table
         for x in curr:
             print(x)
 
+    # iterate by slice
+    for x in q4[0:5]:
+        print(x)
+
     # reuse queries
     q7 = SomeTable.query()
     q7.filter(name=q7.var("name"))

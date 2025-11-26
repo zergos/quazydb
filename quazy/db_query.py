@@ -1048,8 +1048,21 @@ class DBQuery(typing.Generic[T]):
             result = result | expr
         return result
 
-    def __getitem__(self, item: Any) -> DBSQL:
-        """Get an expression for the selected field"""
+    def __getitem__(self, item: Any) -> list[T | Any] | DBSQL:
+        """Get an expression for the selected field or select partially by slice"""
+        if isinstance(item, slice):
+            if item.step is not None:
+                raise QuazyWrongOperation('Slices with step are not supported')
+            if item.start is not None and item.stop is not None:
+                cnt = item.stop - item.start
+                if cnt <= 0:
+                    raise QuazyWrongOperation('Slice step must be positive')
+            elif item.start is not None:
+                cnt = None
+            else:
+                cnt = item.stop
+            q = self.copy().set_window(item.start, cnt)
+            return q.fetch_all()
         return self.fields[item]
 
     def fetch_all(self, as_dict: bool = False) -> list[T | Any]:
