@@ -93,6 +93,11 @@ def gen_stub(db: DBFactory, schema: str = None) -> str:
             field_chunks.append(f'\t{name}: {field_type}')
             var_chunks.append(f'{name}: {type_name(field.type)} = None')
 
+        for name in dir(table):
+            value = getattr(table, name)
+            if isinstance(value, property) and name != 'pk':
+                field_chunks.append(f'\t@property\n\tdef {name}(self) -> {value.fget.__annotations__["return"]}: ...')
+
         for name, field in table.DB.many_fields.items():
             field_chunks.append(f'\t{name}: DBTable.ListGetter["{field.foreign_table.__qualname__}"]')
             var_chunks.append(f'{name}: list["{field.foreign_table.__qualname__}"] = None')
