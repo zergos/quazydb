@@ -64,7 +64,7 @@ class DBQueryField(typing.Generic[T]):
                 field_path = f'"{self._alias}".{field.column}'
             else:
                 field_path = f'"{self._alias}".{DB.body.column}'
-                field_path = self._query.db._trans.json_deserialize(field, f"{field_path}->>'{item}'")
+                field_path = self._query.db._translator.json_deserialize(field, f"{field_path}->>'{item}'")
 
             if field.ref:
                 join_alias = f'{self._table.DB.table}__{field.name}s'
@@ -1181,7 +1181,7 @@ class DBQuery(typing.Generic[T]):
         """Build SQL and freeze the query object to prevent further changes"""
         self._check_frozen()
         self._check_fields()
-        self.frozen_sql = self.db._trans.select(self)
+        self.frozen_sql = self.db._translator.select(self)
         if self.db._debug_mode:
             print(self.frozen_sql)
         return self

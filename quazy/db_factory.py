@@ -10,10 +10,6 @@ import inspect
 from collections import defaultdict
 from contextlib import contextmanager
 
-import psycopg
-import psycopg_pool
-from psycopg.rows import namedtuple_row, class_row, dict_row
-
 from .exceptions import *
 from .db_table import *
 from .db_field import *
@@ -27,10 +23,39 @@ if typing.TYPE_CHECKING:
     from types import SimpleNamespace
     from .db_query import DBQuery, DBSQL
 
+
 __all__ = ['DBFactory']
 
 
 T = typing.TypeVar('T', bound='DBTable')
+
+DBRowFactoryLike = 'Callable[[type[DBTable] | None], type]'
+DBRowLike = DBTable | tuple | dict
+
+class DBCopyLike(typing.Protocol):
+    """Protocol for database copy"""
+    def write_row(self, values: tuple): ...
+
+class DBCursorLike(typing.Protocol):
+    """Protocol for database cursor"""
+    description: Sequence[tuple[str, ...]] | None
+    def execute(self, sql: str, values: Optional[Sequence[Any]] = None) -> Iterator[SimpleNamespace | dict[str, Any] | DBTable]: ...
+    def fetchone(self) -> Optional[tuple[Any]]: ...
+    def fetchall(self) -> list[tuple[Any]]: ...
+    def copy(self, sql: str) -> ContextManager[DBCopyLike]: ...
+
+class DBConnectionLike(typing.Protocol):
+    """Protocol for database connection"""
+    def cursor(self, binary: bool, row_factory: type) -> ContextManager[DBCursorLike]: ...
+    def execute(self, sql: str, values: Optional[Sequence[Any]] = None) -> Iterable[Any]: ...
+    def transaction(self) -> ContextManager[None]: ...
+    def commit(self) -> None: ...
+
+class DBPoolLike(typing.Protocol):
+    """Protocol for database pool"""
+    def getconn(self) -> DBConnectionLike: ...
+    def putconn(self, conn: DBConnectionLike) -> None: ...
+    def connection(self) -> ContextManager[DBConnectionLike]: ...
 
 
 class DBFactory:
@@ -52,12 +77,10 @@ class DBFactory:
             ...
 
     """
-    _trans = Translator
-
-    def __init__(self, connection_pool, debug_mode: bool = False):
+    def __init__(self, connection_pool: DBPoolLike, translator: Translator, named_factory: DBRowFactoryLike, dict_factory: DBRowFactoryLike, class_factory: DBRowFactoryLike, debug_mode: bool = False):
         """Basic constructor for database connection
 
-        Create a connection via a specific pool.
+        Create a connection via a specific connection pool.
 
         Note:
             Normally is not intended to run manually, as it intended to use of proxy constructors
@@ -67,16 +90,20 @@ class DBFactory:
             It is highly appreciated to work with databases supported pools.
 
         Args:
-             connection_pool: Connection pool to work with the database
+             connection_pool: Connection (or pool) to work with the database
              debug_mode: Debug mode - writes all queries to logs before execution
         """
-        self._connection_pool: psycopg_pool.ConnectionPool = connection_pool
+        self._connection_pool: DBPoolLike = connection_pool
+        self._translator = translator
         self._tables: list[type[DBTable]] = list()
+        self._named_factory = named_factory
+        self._dict_factory = dict_factory
+        self._class_factory = class_factory
         self._debug_mode = debug_mode
 
     @staticmethod
     def postgres(**kwargs) -> DBFactory | None:
-        """Proxy constructor Postgres specific
+        """Proxy constructor Postgres specific connection
 
         Args:
             **kwargs: all keywords arguments passed to `psycopg` constructor, except `debug_mode`
@@ -87,6 +114,46 @@ class DBFactory:
         Example:
             db = DBFactory.postgres(conninfo="postgresql://quazy:quazy@localhost/quazy")
         """
+        import psycopg
+        from psycopg.rows import namedtuple_row, dict_row, class_row
+        from .translator_psql import TranslatorPSQL
+
+        debug_mode = kwargs.pop("debug_mode", False)
+        conninfo = kwargs.pop("conninfo")
+        connection = psycopg.connect(conninfo, **kwargs)
+        connection.close()
+
+        class PsycopgConnection:
+            @classmethod
+            def connection(cls) -> ContextManager[psycopg.Connection]:
+                return psycopg.connect(conninfo, **kwargs)
+            @staticmethod
+            def getconn() -> psycopg.Connection:
+                raise QuazyWrongOperation
+            @staticmethod
+            def putconn(conn: psycopg.Connection) -> None:
+                raise QuazyWrongOperation
+
+        return DBFactory(PsycopgConnection, TranslatorPSQL, namedtuple_row, dict_row, class_row, debug_mode)
+
+    @staticmethod
+    def postgres_pool(**kwargs) -> DBFactory | None:
+        """Proxy constructor Postgres specific pool
+
+        Args:
+            **kwargs: all keywords arguments passed to `psycopg` constructor, except `debug_mode`
+
+        Returns:
+            DBFactory instance or None
+
+        Example:
+            db = DBFactory.postgres_pool(conninfo="postgresql://quazy:quazy@localhost/quazy")
+        """
+        import psycopg_pool
+        from psycopg.rows import namedtuple_row, dict_row, class_row
+
+        from .translator_psql import TranslatorPSQL
+
         debug_mode = kwargs.pop("debug_mode", False)
         conninfo = kwargs.pop("conninfo")
         try:
@@ -95,7 +162,7 @@ class DBFactory:
         except Exception as e:
             print(str(e))
             return None
-        return DBFactory(pool, debug_mode)
+        return DBFactory(pool, TranslatorPSQL, namedtuple_row, dict_row, class_row, debug_mode)
 
     def bind(self, cls: type[DBTable], schema: str = 'public'):
         """Bind a specific table to the factory instance
@@ -214,16 +281,16 @@ class DBFactory:
             query.filter(lambda s: getattr(s, k) == v)
         return query.fetch_one()
 
-    def get_connection(self) -> psycopg.Connection:
+    def get_connection(self) -> DBConnectionLike:
         """Get database connection from then pool for low-level operations"""
         return self._connection_pool.getconn()
 
-    def release_connection(self, conn: psycopg.Connection):
+    def release_connection(self, conn: DBConnectionLike):
         """Release given connection to the pool"""
         self._connection_pool.putconn(conn)
 
     @contextmanager
-    def connection(self, reuse_conn: psycopg.Connection = None) -> psycopg.Connection:
+    def connection(self, reuse_conn: DBConnectionLike = None) -> Generator[DBConnectionLike]:
         """Context manager for connection"""
         if reuse_conn is not None:
             yield reuse_conn
@@ -240,9 +307,9 @@ class DBFactory:
         Warning:
             It works without attention. Please double-check before calling.
         """
-        with self.connection() as conn:  # type: psycopg.Connection
+        with self.connection() as conn:  # type: DBConnectionLike
             tables = []
-            for res in conn.execute(self._trans.select_all_tables()):
+            for res in conn.execute(self._translator.select_all_tables()):
                 if not schema or schema == res[0]:
                     tables.append(f'"{res[0]}"."{res[1]}"')
             with conn.transaction():
@@ -332,7 +399,7 @@ class DBFactory:
         """
         all_tables = self.all_tables(schema)
 
-        with self.select(self._trans.select_all_tables()) as created_tables_query:
+        with self.select(self._translator.select_all_tables()) as created_tables_query:
             #created_tables = [(t.schema, t.table) for t in created_tables_query]
             created_tables = created_tables_query.fetchall()
 
@@ -353,7 +420,7 @@ class DBFactory:
         """Check if a table exists in the database
 
         :meta private:"""
-        with self.select(self._trans.is_table_exists(table)) as res:
+        with self.select(self._translator.is_table_exists(table)) as res:
             return res.fetch_one()[0]
 
     def create(self, schema: str = None):
@@ -367,20 +434,20 @@ class DBFactory:
             if table.DB.schema:
                 all_schemas.add(table.DB.schema)
 
-        with self.connection() as conn:  # type: psycopg.Connection
+        with self.connection() as conn:
             with conn.transaction():
                 for schema in all_schemas:
-                    conn.execute(self._trans.create_schema(schema))
+                    conn.execute(self._translator.create_schema(schema))
                 for table in all_tables:
-                    conn.execute(self._trans.create_table(table))
+                    conn.execute(self._translator.create_table(table))
                     for field in table.DB.fields.values():
                         if field.indexed:
-                            conn.execute(self._trans.create_index(table, field))
+                            conn.execute(self._translator.create_index(table, field))
 
                 for table in all_tables:
                     for field in table.DB.fields.values():
                         if field.ref and not field.property:
-                            conn.execute(self._trans.add_reference(table, field))
+                            conn.execute(self._translator.add_reference(table, field))
 
     def insert(self, item: T) -> T:
         """Insert item into the database
@@ -410,9 +477,9 @@ class DBFactory:
             else:
                 fields.append((field, getattr(item, name, DefaultValue)))
 
-        with self.connection() as conn:  # type: psycopg.Connection
+        with self.connection() as conn:
 
-            sql, values = self._trans.insert(item, fields)
+            sql, values = self._translator.insert(item, fields)
             item.pk = conn.execute(sql, values).fetchone()[0]
             conn.commit()
             item._modified_fields_.clear()
@@ -433,8 +500,8 @@ class DBFactory:
                     if not row.pk:
                         self.save(row)
 
-                new_indices_sql = self._trans.insert_many_index(field.middle_table, item.DB.table,
-                                                                field.foreign_table.DB.table)
+                new_indices_sql = self._translator.insert_many_index(field.middle_table, item.DB.table,
+                                                                     field.foreign_table.DB.table)
                 with conn.cursor() as curr:
                     with curr.copy(new_indices_sql) as copy:
                         for row in getattr(item, field_name):
@@ -462,13 +529,13 @@ class DBFactory:
             fields.append((field, getattr(item, name, DefaultValue)))
         with self.connection() as conn:
             if fields:
-                sql, values = self._trans.update(item.__class__, fields)
+                sql, values = self._translator.update(item.__class__, fields)
                 values['pk'] = getattr(item, item.DB.pk.name)
                 conn.execute(sql, values)
                 item._modified_fields_.clear()
 
             for table in item.DB.subtables.values():
-                sql = self._trans.delete_related(table, item.DB.table)
+                sql = self._translator.delete_related(table, item.DB.table)
                 conn.execute(sql, (getattr(item, item.DB.pk.name), ))
                 for row in getattr(item, table.DB.snake_name):
                     self.insert(row)
@@ -486,7 +553,7 @@ class DBFactory:
 
                 # delete old items, add new items
                 new_indices = set(row.pk for row in getattr(item, field_name))
-                old_indices_sql = self._trans.select_many_indices(field.middle_table, item.DB.table, field.foreign_table.DB.table)
+                old_indices_sql = self._translator.select_many_indices(field.middle_table, item.DB.table, field.foreign_table.DB.table)
                 results = conn.execute(old_indices_sql, {"value": item.pk}).fetchone()
                 old_indices = set(results[0]) if results[0] else set()
 
@@ -494,11 +561,11 @@ class DBFactory:
                 indices_to_add = list(new_indices - old_indices)
 
                 if indices_to_delete:
-                    delete_indices_sql = self._trans.delete_many_indices(field.middle_table, item.DB.table, field.foreign_table.DB.table)
+                    delete_indices_sql = self._translator.delete_many_indices(field.middle_table, item.DB.table, field.foreign_table.DB.table)
                     conn.execute(delete_indices_sql, {"value": item.pk, "indices": indices_to_delete})
 
                 if indices_to_add:
-                    new_indices_sql = self._trans.insert_many_index(field.middle_table, item.DB.table, field.foreign_table.DB.table)
+                    new_indices_sql = self._translator.insert_many_index(field.middle_table, item.DB.table, field.foreign_table.DB.table)
                     with conn.cursor() as curr:
                         with curr.copy(new_indices_sql) as copy:
                             for index in indices_to_add:
@@ -508,7 +575,7 @@ class DBFactory:
         return item
 
     @contextmanager
-    def select(self, query: Union[DBQuery, str], as_dict: bool = False) -> Iterator[DBTable | SimpleNamespace | dict[str, Any]]:
+    def select(self, query: Union[DBQuery, str], as_dict: bool = False) -> Iterator[Iterator[DBTable | SimpleNamespace | dict[str, Any]]]:
         """Select items from the database
 
         It performs a prepared query to a database and yields results. Is not intended for direct calls.
@@ -527,20 +594,20 @@ class DBFactory:
         with self.connection() as conn:
             if not isinstance(query, str):
                 if not query.is_frozen:
-                    sql = self._trans.select(query)
+                    sql = self._translator.select(query)
                     if self._debug_mode: print(sql)
                 else:
                     sql = query.frozen_sql
                 if as_dict:
-                    row_factory = dict_row
+                    row_factory = self._dict_factory
                 elif query.fetch_objects:
-                    row_factory = class_row(lambda **kwargs: query.table_class.raw(_db_=self, **kwargs))
+                    row_factory = self._class_factory(lambda **kwargs: query.table_class.raw(_db_=self, **kwargs))
                 else:
-                    row_factory = namedtuple_row
+                    row_factory = self._named_factory
                 with conn.cursor(binary=True, row_factory=row_factory) as curr:
                     yield curr.execute(sql, query.args)
             else:
-                with conn.cursor(binary=True, row_factory=dict_row if as_dict else namedtuple_row) as curr:
+                with conn.cursor(binary=True, row_factory=self._dict_factory if as_dict else self._named_factory) as curr:
                     yield curr.execute(query)
 
     def update_many(self, query: DBQuery[T], **values):
@@ -556,7 +623,7 @@ class DBFactory:
             fields.append((field, value))
 
         with self.connection() as conn:
-            sql, values = self._trans.update(query.table_class, fields, query)
+            sql, values = self._translator.update(query.table_class, fields, query)
             if self._debug_mode: print(sql)
             conn.execute(sql, query.args | values)
 
@@ -589,22 +656,37 @@ class DBFactory:
                 else:
                     field = DBField(col.name)
                     field.prepare(col.name)
-                    field.type = self._trans.TYPES_BY_OID[col.type_code]
+                    field.type = self._translator.TYPES_BY_OID[col.type_code]
                     res.append(field)
 
             return no_result
+
+        def extract_description(cols_info: Sequence[tuple[str, ...]]) -> list[DBField]:
+            res = []
+            has_fields = isinstance(query, DBQuery) and query.table_class is not None
+            for col in cols_info:
+                if has_fields and (field := query.table_class.DB.fields.get(col[0])) is not None:
+                    res.append(field)
+                else:
+                    field = DBField(col[0])
+                    field.prepare(col[0])
+                    field.type = self._translator.TYPES_BY_OID[col[1]]
+                    res.append(field)
+            return res
 
         res = []
         with self.connection() as conn:
             if isinstance(query, DBQuery):
                 query = query.copy().set_window(limit=0)
-                sql = self._trans.select(query)
+                sql = self._translator.select(query)
                 if self._debug_mode: print(sql)
-                with conn.cursor(binary=True, row_factory=types_row) as curr:
+                with conn.cursor(binary=True) as curr:
                     curr.execute(sql, query.args)
+                    return extract_description(curr.description)
             else:
-                with conn.cursor(binary=True, row_factory=types_row) as curr:
+                with conn.cursor(binary=True) as curr:
                     curr.execute(query)
+                    return extract_description(curr.description)
 
         return res
 
@@ -649,7 +731,7 @@ class DBFactory:
                items: typing.Iterator[T] = None,
                query: DBQuery[T] = None,
                filter: Callable[[T], DBSQL] = None,
-               reuse_conn: psycopg.Connection = None):
+               reuse_conn: DBConnectionLike = None):
         """Delete an item or items from the database
 
         It has many possible ways to delete expected items:
@@ -675,12 +757,12 @@ class DBFactory:
             if table is None:
                 raise QuazyWrongOperation("Both `id` and `table` should be specified")
             with self.connection(reuse_conn) as conn:
-                sql = self._trans.delete_related(table, table.DB.pk.column)
+                sql = self._translator.delete_related(table, table.DB.pk.column)
                 conn.execute(sql, (id, ))
         elif item is not None:
             item._before_delete(self)
             with self.connection(reuse_conn) as conn:
-                sql = self._trans.delete_related(type(item), item.DB.pk.column)
+                sql = self._translator.delete_related(type(item), item.DB.pk.column)
                 conn.execute(sql, (item.pk, ))
             item._after_delete(self)
         elif items is not None:
@@ -693,7 +775,7 @@ class DBFactory:
             builder = self.query(query.table_class)
             sub = builder.with_query(query.select("pk"), not_materialized=True)
             with self.connection(reuse_conn) as conn:
-                sql = self._trans.delete_selected(builder, sub)
+                sql = self._translator.delete_selected(builder, sub)
                 if self._debug_mode: print(sql)
                 conn.execute(sql, builder.args)
         elif filter is not None:
@@ -703,7 +785,7 @@ class DBFactory:
             self.delete(query=query)
         elif table is not None:
             with self.connection(reuse_conn) as conn:
-                sql = self._trans.delete(table)
+                sql = self._translator.delete(table)
                 conn.execute(sql)
         else:
             raise QuazyWrongOperation('Specify one of the arguments')

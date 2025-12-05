@@ -363,7 +363,7 @@ def apply_changes(db: DBFactory, diff: MigrationDifference, comments: str = "", 
         print('Done')
         return
 
-    trans = db._trans
+    trans = db._translator
     with db.connection() as conn:
         with conn.transaction():
             for command in diff.commands:
