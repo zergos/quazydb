@@ -9,10 +9,6 @@ from quazy.db_query import DBQuery, DBQueryField
 from quazy.stub import gen_stub
 from quazy.db_types import FieldCID, FieldBody, Property, Many, ManyToMany
 
-#if typing.TYPE_CHECKING:
-#    from typing import *
-
-
 class NamedTable(DBTable):
     _meta_ = True
 
@@ -121,14 +117,11 @@ def configure_logging():
 if __name__ == '__main__':
     #configure_logging()
 
-    db = DBFactory.postgres(conninfo="postgresql://quazy:quazy@127.0.0.1/quazy")
+    #db = DBFactory.postgres("postgresql://quazy:quazy@127.0.0.1/quazy")
+    db = DBFactory.sqlite("file:quazy.db?mode=rwc")
+
     db._debug_mode = True
     db.bind_module()
-
-    #import jsonpickle
-    #print(jsonpickle.encode(db._tables))
-
-    #sys.exit()
 
     db.clear()
     db.create()

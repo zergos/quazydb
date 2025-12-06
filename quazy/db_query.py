@@ -61,9 +61,9 @@ class DBQueryField(typing.Generic[T]):
         if item in DB.fields:
             field: DBField = DB.fields[item]
             if not field.property:
-                field_path = f'"{self._alias}".{field.column}'
+                field_path = f'"{self._alias}"."{field.column}"'
             else:
-                field_path = f'"{self._alias}".{DB.body.column}'
+                field_path = f'"{self._alias}"."{DB.body.column}"'
                 field_path = self._query.db._translator.json_deserialize(field, f"{field_path}->>'{item}'")
 
             if field.ref:
@@ -609,11 +609,11 @@ class DBQuery(typing.Generic[T]):
         if value in self.args.values():
             key = next(k for k, v in self.args.items() if v == value)
             #key = list(self.args.keys())[list(self.args.values()).index(value)]
-            return DBSQL(self, f'%({key})s', aggregated)
+            return DBSQL(self, self.db._translator.place_arg(key), aggregated)
         self._arg_counter += 1
         key = f'_arg_{self._arg_counter}'
         self.args[key] = value
-        return DBSQL(self, f'%({key})s', aggregated)
+        return DBSQL(self, self.db._translator.place_arg(key), aggregated)
 
     def var(self, key: str, value: Optional[Any] = None) -> DBSQL:
         """Define variable to pass to query.
@@ -634,7 +634,7 @@ class DBQuery(typing.Generic[T]):
                     print(q.fetch_one())
         """
         self.args[key] = value
-        return DBSQL(self, f'%({key})s')
+        return DBSQL(self, self.db._translator.place_arg(key))
 
     def __setitem__(self, key, value):
         """Set variable to value

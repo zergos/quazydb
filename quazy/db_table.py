@@ -567,6 +567,7 @@ class DBTable(metaclass=MetaTable):
                     object.__setattr__(self, k, DBTable.ItemGetter(self._db_, field.type, field.name, v.pk if isinstance(v, DBTable) else v, view))
                     continue
             object.__setattr__(self, k, v)
+        self._modified_fields_ = set()
         return self
 
     def __setattr__(self, key, value):

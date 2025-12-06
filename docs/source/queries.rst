@@ -40,7 +40,7 @@ Query object allows to use lambda expressions in almost every method, like `sele
 It is possible to write Python-like expressions to make translated to SQL directly, but with several nuances.
 
 +-------------------+-------------------------------+
-| Python            | pSQL                          |
+| Python            | SQL                           |
 +===================+===============================+
 | expr[1]           | expr[1]                       |
 +-------------------+-------------------------------+

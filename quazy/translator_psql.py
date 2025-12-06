@@ -46,6 +46,11 @@ class TranslatorPSQL(Translator):
         2950: UUID,
     }
 
+    arg_prefix = '%('
+    arg_suffix = ')s'
+
+    json_object_func_name = 'json_build_object'
+
     @classmethod
     def type_name(cls, field: DBField, primary: bool = True) -> str:
         if field.pk and primary:
@@ -153,7 +158,7 @@ class TranslatorPSQL(Translator):
         return res
 
     @classmethod
-    def create_schema(cls, name: str):
+    def create_schema(cls, name: str) -> str:
         return f'CREATE SCHEMA IF NOT EXISTS {name}'
 
     @classmethod
@@ -168,13 +173,17 @@ class TranslatorPSQL(Translator):
         return res
 
     @classmethod
-    def add_field(cls, table: type[DBTable], field: DBField):
+    def drop_table_by_name(cls, table_name: str) -> str:
+        return f'DROP TABLE IF EXISTS {table_name} CASCADE'
+
+    @classmethod
+    def add_field(cls, table: type[DBTable], field: DBField) -> str:
         col = f'"{field.column}" {cls.type_name(field)} {cls.column_options(field, table)}'
         res = f'ALTER TABLE {cls.table_name(table)} ADD COLUMN {col}'
         return res
 
     @classmethod
-    def drop_field(cls, table: type[DBTable], field: DBField):
+    def drop_field(cls, table: type[DBTable], field: DBField) -> str:
         res = f'ALTER TABLE {cls.table_name(table)} DROP COLUMN {field.column}'
         return res
 
@@ -184,13 +193,8 @@ class TranslatorPSQL(Translator):
         return res
 
     @classmethod
-    def alter_field_type(cls, table: type[DBTable], field: DBField):
+    def alter_field_type(cls, table: type[DBTable], field: DBField) -> str:
         res = f'ALTER TABLE {cls.table_name(table)} ALTER COLUMN {field.column} TYPE {cls.type_name(field)} USING {field.column}::{cls.type_name(field)}'
-        return res
-
-    @classmethod
-    def drop_table(cls, table: type[DBTable]) -> str:
-        res = f'DROP TABLE {cls.table_name(table)}'
         return res
 
     @classmethod
@@ -242,25 +246,30 @@ class TranslatorPSQL(Translator):
         sql_values: list[str] = []
         values: dict[str, Any] = {}
         body_values: dict[str, Any] = {}
+        defailt_fields = []
         idx = 1
         for field, value in fields:
             if not field.property:  # attr
                 if field.default_sql or field.body:
                     continue
                 if field.pk:
-                    sql_values.append('DEFAULT')
-                elif value is DefaultValue:
-                    if field.default is object:
+                    if cls.supports_default:
                         sql_values.append('DEFAULT')
                     else:
-                        sql_values.append(f'%(v{idx})s')
+                        defailt_fields.append(field)
+                elif value is DefaultValue:
+                    if field.default is object:
+                        # sql_values.append('DEFAULT')
+                        defailt_fields.append(field)
+                    else:
+                        sql_values.append(cls.place_arg(f'v{idx}'))
                         if not callable(field.default):
                             values[f'v{idx}'] = field.default
                         else:
                             values[f'v{idx}'] = field.default(item)
                         idx += 1
                 else:
-                    sql_values.append(f'%(v{idx})s')
+                    sql_values.append(cls.place_arg(f'v{idx}'))
                     values[f'v{idx}'] = cls.get_value(field, value)
                     idx += 1
 
@@ -271,19 +280,26 @@ class TranslatorPSQL(Translator):
                     if field.default in None:
                         body_values[field.name] = 'null'
                     else:
-                        body_values[field.name] = cls.json_serialize(field, f'%(v{idx})s')
+                        body_values[field.name] = cls.json_serialize(field, cls.place_arg(f'v{idx}'))
                         if not callable(field.default):
                             values[f'v{idx}'] = field.default
                         else:
                             values[f'v{idx}'] = field.default(item)
                         idx += 1
                 else:
-                    body_values[field.name] = cls.json_serialize(field, f'%(v{idx})s')
+                    body_values[field.name] = cls.json_serialize(field, cls.place_arg(f'v{idx}'))
                     values[f'v{idx}'] = cls.get_value(field, value)
                     idx += 1
 
         #columns = ','.join(f'"{field.column}"' for field, _ in fields if not field.many_field)
-        columns = ','.join(f'"{field.column}"' for field, _ in fields if not field.default_sql and not field.property and not field.body)
+        columns = ','.join(f'"{field.column}"'
+                           for field, _ in fields
+                           if not field.default_sql and not field.property and not field.body
+                           and field not in defailt_fields
+                           )
+        if not columns:
+            return f'INSERT INTO {cls.table_name(item)} DEFAULT VALUES RETURNING "{item.DB.pk.column}"', ()
+
         row = ','.join(sql_values)
 
         if item.DB.body:
@@ -292,7 +308,7 @@ class TranslatorPSQL(Translator):
             columns += f'"{item.DB.body.column}"'
             if body_values:
                 body_value = ', '.join(f"'{name}',{value}" for name, value in body_values.items())
-                body_value = f'json_build_object({body_value})'
+                body_value = f'{cls.json_object_func_name}({body_value})'
             else:
                 body_value = "'{}'::jsonb"
             if row:
@@ -308,7 +324,7 @@ class TranslatorPSQL(Translator):
 
     @classmethod
     def delete_related(cls, table: type[DBTable], column: str) -> str:
-        return f'DELETE FROM {cls.table_name(table)} WHERE "{column}" = %s'
+        return f'DELETE FROM {cls.table_name(table)} WHERE "{column}" = {cls.arg_unnamed}'
 
     @classmethod
     def update(cls, table: type[DBTable], fields: list[tuple[DBField, Any]], query: DBQuery | str = None) -> tuple[str, dict[str, Any]]:
@@ -318,7 +334,7 @@ class TranslatorPSQL(Translator):
         #filtered = [f for f in fields if not f[0].many_field and not f[0].pk]
         filtered = [f for f in fields if not f[0].pk]
         for field, value in filtered:
-            sql_values.append(f'%(v{idx})s')
+            sql_values.append(cls.place_arg(f'v{idx}'))
             values[f'v{idx}'] = cls.get_value(field, value)
             idx += 1
 
@@ -338,7 +354,7 @@ class TranslatorPSQL(Translator):
             sets_sql += f'"{table.DB.body.column}" = "{table.DB.body.column}" || json_build_object({body_value})'
 
         if query is None:
-            where_sql = f'"{table.DB.pk.column}" = %(pk)s'
+            where_sql = f'"{table.DB.pk.column}" = {cls.place_arg("pk")}'
         elif isinstance(query, str):
             where_sql = query
         else:
@@ -360,12 +376,12 @@ class TranslatorPSQL(Translator):
         return value #.replace("'", "''")
 
     @classmethod
-    def with_select(cls, with_queries: list[DBWithClause]):
+    def with_select(cls, with_queries: list[DBWithClause]) -> str:
         sql = "WITH\n"
         with_blocks = []
         for sub in with_queries:
             render = cls.select(sub.query)
-            render = render.replace('%(_arg_', f'%(_{cls.subquery_name(sub.query)}_arg_')
+            render = render.replace(cls.arg_prefix + '_arg_', f'{cls.arg_prefix}_{cls.subquery_name(sub.query)}_arg_')
             block = f'{cls.subquery_name(sub.query)} AS {"NOT MATERIALIZED" if sub.not_materialized else ""} (\n{render})\n'
             with_blocks.append(block)
         sql += ',\n'.join(with_blocks)
@@ -510,7 +526,7 @@ UNION
         return f'''SELECT array_agg("{secondary_index}") FROM
             {cls.table_name(middle_table)}
         WHERE
-            "{primary_index}" = %(value)s
+            "{primary_index}" = {cls.place_arg("value")}
         '''
 
     @classmethod
@@ -518,7 +534,7 @@ UNION
         return f'''DELETE FROM
             {cls.table_name(middle_table)}
         WHERE
-            "{primary_index}" = %(value)s AND
+            "{primary_index}" = {cls.place_arg("value")} AND
             "{secondary_index}" in %(indices)s
         '''
 

@@ -15,6 +15,22 @@ class Translator(ABC):
 
     TYPES_BY_OID = {}
 
+    supports_schema: bool = True
+    supports_default: bool = True
+    supports_copy: bool = True
+
+    arg_prefix = '%('
+    arg_suffix = ')s'
+    arg_unnamed = '%s'
+
+    @classmethod
+    def place_arg(cls, arg: str) -> str:
+        return f'{cls.arg_prefix}{arg}{cls.arg_suffix}'
+
+    @classmethod
+    @abstractmethod
+    def table_name(cls, table: type[DBTable]) -> str: ...
+
     @classmethod
     @abstractmethod
     def create_index(cls, table: type[DBTable], field: DBField) -> str: ...
@@ -29,19 +45,27 @@ class Translator(ABC):
 
     @classmethod
     @abstractmethod
-    def create_schema(cls, name: str): ...
+    def create_schema(cls, name: str) -> str: ...
 
     @classmethod
     @abstractmethod
     def create_table(cls, table: type[DBTable]) -> str: ...
 
     @classmethod
-    @abstractmethod
-    def add_field(cls, table: type[DBTable], field: DBField): ...
+    def drop_table(cls, table: type[DBTable]) -> str:
+        return cls.drop_table_by_name(cls.table_name(table))
 
     @classmethod
     @abstractmethod
-    def drop_field(cls, table: type[DBTable], field: DBField): ...
+    def drop_table_by_name(cls, table_name: str) -> str: ...
+
+    @classmethod
+    @abstractmethod
+    def add_field(cls, table: type[DBTable], field: DBField) -> str: ...
+
+    @classmethod
+    @abstractmethod
+    def drop_field(cls, table: type[DBTable], field: DBField) -> str: ...
 
     @classmethod
     @abstractmethod
@@ -49,11 +73,7 @@ class Translator(ABC):
 
     @classmethod
     @abstractmethod
-    def alter_field_type(cls, table: type[DBTable], field: DBField): ...
-
-    @classmethod
-    @abstractmethod
-    def drop_table(cls, table: type[DBTable]) -> str: ...
+    def alter_field_type(cls, table: type[DBTable], field: DBField) -> str: ...
 
     @classmethod
     @abstractmethod

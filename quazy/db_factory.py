@@ -10,6 +10,8 @@ import inspect
 from collections import defaultdict
 from contextlib import contextmanager
 
+from more_itertools.recipes import factor
+
 from .exceptions import *
 from .db_table import *
 from .db_field import *
@@ -48,6 +50,8 @@ class DBConnectionLike(typing.Protocol):
     """Protocol for database connection"""
     def cursor(self, binary: bool, row_factory: type) -> ContextManager[DBCursorLike]: ...
     def execute(self, sql: str, values: Optional[Sequence[Any]] = None) -> Iterable[Any]: ...
+    def executemany(self, sql: str, values: Sequence[Sequence[Any]]) -> Iterable[Any]: ...
+    def executescript(self, sql: str) -> Iterable[Any]: ...
     def transaction(self) -> ContextManager[None]: ...
     def commit(self) -> None: ...
 
@@ -102,10 +106,11 @@ class DBFactory:
         self._debug_mode = debug_mode
 
     @staticmethod
-    def postgres(**kwargs) -> DBFactory | None:
+    def postgres(conninfo: str, **kwargs) -> DBFactory | None:
         """Proxy constructor Postgres specific connection
 
         Args:
+            conninfo: connection string to connect to a database
             **kwargs: all keywords arguments passed to `psycopg` constructor, except `debug_mode`
 
         Returns:
@@ -115,11 +120,10 @@ class DBFactory:
             db = DBFactory.postgres(conninfo="postgresql://quazy:quazy@localhost/quazy")
         """
         import psycopg
-        from psycopg.rows import namedtuple_row, dict_row, class_row
+        from psycopg.rows import namedtuple_row, dict_row, kwargs_row
         from .translator_psql import TranslatorPSQL
 
         debug_mode = kwargs.pop("debug_mode", False)
-        conninfo = kwargs.pop("conninfo")
         connection = psycopg.connect(conninfo, **kwargs)
         connection.close()
 
@@ -134,13 +138,14 @@ class DBFactory:
             def putconn(conn: psycopg.Connection) -> None:
                 raise QuazyWrongOperation
 
-        return DBFactory(PsycopgConnection, TranslatorPSQL, namedtuple_row, dict_row, class_row, debug_mode)
+        return DBFactory(PsycopgConnection, TranslatorPSQL, namedtuple_row, dict_row, kwargs_row, debug_mode)
 
     @staticmethod
-    def postgres_pool(**kwargs) -> DBFactory | None:
+    def postgres_pool(conninfo: str, **kwargs) -> DBFactory | None:
         """Proxy constructor Postgres specific pool
 
         Args:
+            conninfo: connection string to connect to a database
             **kwargs: all keywords arguments passed to `psycopg` constructor, except `debug_mode`
 
         Returns:
@@ -150,19 +155,51 @@ class DBFactory:
             db = DBFactory.postgres_pool(conninfo="postgresql://quazy:quazy@localhost/quazy")
         """
         import psycopg_pool
-        from psycopg.rows import namedtuple_row, dict_row, class_row
+        from psycopg.rows import namedtuple_row, dict_row, kwargs_row
 
         from .translator_psql import TranslatorPSQL
 
         debug_mode = kwargs.pop("debug_mode", False)
-        conninfo = kwargs.pop("conninfo")
         try:
             pool = psycopg_pool.ConnectionPool(conninfo, kwargs=kwargs)
             pool.wait()
         except Exception as e:
             print(str(e))
             return None
-        return DBFactory(pool, TranslatorPSQL, namedtuple_row, dict_row, class_row, debug_mode)
+        return DBFactory(pool, TranslatorPSQL, namedtuple_row, dict_row, kwargs_row, debug_mode)
+
+    @staticmethod
+    def sqlite(conn_uri: str, **kwargs) -> DBFactory | None:
+        """Proxy constructor SQLite specific connection
+
+        Args:
+            conn_uri: connection string to connect to a database
+            kwargs: all keywords arguments passed to `sqlite3` constructor, except `debug_mode`
+
+        Example:
+            db = DBFactory.sqlite("file:test.db?mode=rwc")
+        """
+        import sqlite3
+        from .translator_sqlite import TranslatorSQLite, namedtuple_row, dict_row, kwargs_row, ConnectionFactory
+
+        debug_mode = kwargs.pop("debug_mode", False)
+        detect_types = kwargs.pop("detect_types", sqlite3.PARSE_DECLTYPES)
+        connection = sqlite3.connect(conn_uri, uri=True, detect_types=detect_types, factory=ConnectionFactory, **kwargs)
+
+        class SQLiteConnection:
+            @classmethod
+            @contextmanager
+            def connection(cls) -> Generator[sqlite3.Connection]:
+                yield connection
+            @staticmethod
+            def getconn() -> sqlite3.Connection:
+                raise QuazyWrongOperation
+            @staticmethod
+            def putconn(conn: sqlite3.Connection) -> None:
+                raise QuazyWrongOperation
+
+        return DBFactory(SQLiteConnection, TranslatorSQLite, namedtuple_row, dict_row, kwargs_row, debug_mode)
+
 
     def bind(self, cls: type[DBTable], schema: str = 'public'):
         """Bind a specific table to the factory instance
@@ -310,11 +347,13 @@ class DBFactory:
         with self.connection() as conn:  # type: DBConnectionLike
             tables = []
             for res in conn.execute(self._translator.select_all_tables()):
-                if not schema or schema == res[0]:
+                if self._translator.supports_schema and (not schema or schema == res[0]):
                     tables.append(f'"{res[0]}"."{res[1]}"')
+                else:
+                    tables.append(f'"{res[0]}"')
             with conn.transaction():
-                for table in tables:
-                    conn.execute(f'DROP TABLE {table} CASCADE')
+                for table_name in tables:
+                    conn.execute(self._translator.drop_table_by_name(table_name))
 
     def all_tables(self, schema: str = None, for_stub: bool = False) -> list[type[DBTable]]:
         """Get all known tables in the database
@@ -436,18 +475,26 @@ class DBFactory:
 
         with self.connection() as conn:
             with conn.transaction():
-                for schema in all_schemas:
-                    conn.execute(self._translator.create_schema(schema))
+                # create schemas
+                if self._translator.supports_schema:
+                    for schema in all_schemas:
+                        conn.execute(self._translator.create_schema(schema))
+
+                # create tables
                 for table in all_tables:
                     conn.execute(self._translator.create_table(table))
-                    for field in table.DB.fields.values():
-                        if field.indexed:
-                            conn.execute(self._translator.create_index(table, field))
 
+                # create foreign keys
                 for table in all_tables:
                     for field in table.DB.fields.values():
                         if field.ref and not field.property:
                             conn.execute(self._translator.add_reference(table, field))
+
+                # create indices
+                for table in all_tables:
+                    for field in table.DB.fields.values():
+                        if field.indexed:
+                            conn.execute(self._translator.create_index(table, field))
 
     def insert(self, item: T) -> T:
         """Insert item into the database
@@ -503,9 +550,12 @@ class DBFactory:
                 new_indices_sql = self._translator.insert_many_index(field.middle_table, item.DB.table,
                                                                      field.foreign_table.DB.table)
                 with conn.cursor() as curr:
-                    with curr.copy(new_indices_sql) as copy:
-                        for row in getattr(item, field_name):
-                            copy.write_row((item.pk, row.pk))
+                    if self._translator.supports_copy:
+                        with curr.copy(new_indices_sql) as copy:
+                            for row in getattr(item, field_name):
+                                copy.write_row((item.pk, row.pk))
+                    else:
+                        curr.executemany(new_indices_sql, [(item.pk, row.pk) for row in getattr(item, field_name)])
 
         item._after_insert(self)
         return item
@@ -567,9 +617,12 @@ class DBFactory:
                 if indices_to_add:
                     new_indices_sql = self._translator.insert_many_index(field.middle_table, item.DB.table, field.foreign_table.DB.table)
                     with conn.cursor() as curr:
-                        with curr.copy(new_indices_sql) as copy:
-                            for index in indices_to_add:
-                                copy.write_row((item.pk, index))
+                        if self._translator.supports_copy:
+                            with curr.copy(new_indices_sql) as copy:
+                                for index in indices_to_add:
+                                    copy.write_row((item.pk, index))
+                        else:
+                            curr.executemany(new_indices_sql, [(item.pk, index) for index in indices_to_add])
 
         item._after_update(self)
         return item
