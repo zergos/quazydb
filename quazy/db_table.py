@@ -19,6 +19,7 @@ except ImportError:
 
 from .db_field import DBField, UX, DBManyField, DBManyToManyField
 from .db_types import *
+from .db_types import T
 from .exceptions import *
 
 if typing.TYPE_CHECKING:
@@ -27,8 +28,6 @@ if typing.TYPE_CHECKING:
     from .db_query import DBQuery, DBQueryField, DBSQL, FDBSQL
 
 __all__ = ['DBTable']
-
-T = typing.TypeVar('T', bound='DBTable')
 
 def camel2snake(name: str) -> str:
     return camel2snake.r.sub(r'_\1', name).lower()
@@ -40,7 +39,7 @@ def get_annotated_id(t: str) -> str | None:
     groups = get_annotated_id.r.match(t)
     return groups and groups.group(2)
 
-get_annotated_id.r = re.compile(r'''^(.*?)(Many|ManyToMany|Property|FieldCID)\[(.+?)]$''')
+get_annotated_id.r = re.compile(r'''^(.*?)(Many|ManyToMany|Property|FieldCID|ClassVar)\[(.+?)]$''')
 
 class MetaTable(type):
     db_base_class: type[DBTable.DB]
@@ -125,6 +124,12 @@ class MetaTable(type):
         for name, t in annotations.items():  # type: str, type
             if name.startswith('_'):
                 continue
+            if (isinstance(t, typing._GenericAlias) and t.__name__ == "ClassVar"
+                or isinstance(t, str) and get_annotated_id(t) == "ClassVar"):
+                continue
+            if (isinstance(t, typing._AnnotatedAlias) and t.__metadata__[0] == 'ObjVar'
+                or isinstance(t, str) and get_annotated_id(t) == 'ObjVar'):
+                continue
             field = attrs.pop(name, DBField())
             if isinstance(field, DBField):
                 field.prepare(name)
@@ -190,6 +195,170 @@ class MetaTable(type):
                     DB.body = base.DB.body
 
         return fields
+
+    def resolve_types(cls, globalns):
+        """Resolve fields types from annotations
+
+        :meta private:"""
+        # eval annotations
+        if sys.version_info >= (3, 14):
+            annotations = annotationlib.get_annotations(cls, format=annotationlib.Format.FORWARDREF)
+        else:
+            annotations = cls.__annotations__
+
+        type_hints = typing.get_type_hints(cls, globalns)
+        for name, t in type_hints.items():
+            if name not in cls.DB.fields:  # or cls.fields[name].type is not None:
+                continue
+            field: DBField = cls.DB.fields[name]
+            annotation = annotations.get(name, None)
+            if cls.resolve_type(t, annotation, field, globalns):
+                setattr(cls, name, list())
+                del cls.DB.fields[name]
+
+        # eval owner
+        if isinstance(cls.DB.owner, str):
+            base_cls: type[DBTable] = getattr(sys.modules[cls.__module__], cls.DB.owner)
+            # field_name = camel2snake(cls.__name__)
+            field = DBField()
+            field.prepare(base_cls.DB.table)
+            field.type = base_cls
+            field.ref = True
+            field.required = True
+            cls.DB.owner = base_cls
+            cls.DB.fields[field.column] = field
+
+        # resolve types for subclasses
+        for name, t in vars(cls).items():
+            if inspect.isclass(t) and issubclass(t, DBTable):
+                cls.DB.subtables[t.DB.snake_name] = t
+                t.DB.schema = cls.DB.schema
+                t.DB.db = cls.DB.db
+                t.resolve_types(globalns)
+
+    def resolve_type(cls, t: type, ta: type | None, field: DBField, globalns) -> bool | None:
+        """Resolve field types from annotations
+
+        :meta private:"""
+        if inspect.isclass(t) and issubclass(t, DBField):
+            # import custom field attributes
+            for k, v in t.__dict__.items():
+                if k.startswith('_'):
+                    continue
+                if issubclass(v, UX):
+                    for kk, vv in v.__dict__.items():
+                        if not kk.startswith('_'):
+                            setattr(field.ux, kk, vv)
+                else:
+                    setattr(field, k, v)
+
+        elif (ta is not None and
+              (isinstance(ta, typing._AnnotatedAlias) and (meta_name:=ta.__metadata__[0]) or
+               isinstance(ta, str) and (meta_name:=get_annotated_id(ta)) is not None)):
+            if meta_name == 'FieldCID':
+                field.type = t
+            elif meta_name == 'Property':
+                field.property = True
+                field.required = False
+                cls.resolve_type(t, None, field, globalns)
+            elif meta_name in ('Many', 'ManyToMany'):
+                field_type = t.__args__[0]
+                if not inspect.isclass(field_type) or not issubclass(field_type, DBTable):
+                    raise QuazyFieldTypeError(f'Many type `{t}` should be referenced to another DBTable')
+                if meta_name == 'Many':
+                    cls.DB.many_fields[field.name] = DBManyField(field_type, field.reverse_name)
+                else:
+                    cls.DB.many_to_many_fields[field.name] = DBManyToManyField(field_type, field.reverse_name)
+                return True
+
+        elif isinstance(t, typing._UnionGenericAlias) or isinstance(t, types.UnionType):
+            if len(args:=typing.get_args(t)) == 2 and args[1] is type(None):
+                # 'Optional' annotation
+                field.required = False
+                DBTable.resolve_type(args[0], None, field, globalns)
+
+        elif t is FieldBody:
+            field.type = dict
+
+        elif inspect.isclass(t) and issubclass(t, DBTable):
+            # Foreign key
+            field.ref = True
+            field.type = t
+
+        elif t in KNOWN_TYPES or inspect.isclass(t) and issubclass(t, Enum):
+            # Base type
+            field.type = t
+
+        else:
+            raise QuazyFieldTypeError(f'type `{t}` is not supported as field type for `{cls.__qualname__}.{field.name}`')
+
+    def resolve_types_many(cls, add_middle_table: Callable[[type[DBTable]], Any]):
+        """Resolve referred types from annotations
+
+        :meta private:"""
+        # eval refs
+        for name, field in cls.DB.fields.items():
+            if field.ref:
+                rev_name = field.reverse_name or cls.DB.snake_name
+                if rev_name in field.type.DB.many_fields:
+                    if field.type.DB.many_fields[rev_name].foreign_table is not cls:
+                        raise QuazyFieldNameError(
+                            f'Cannot reuse Many field in table `{field.type.__name__}` with name `{rev_name}`, it is associated with table `{field.type.DB.many_fields[rev_name].source_table.__name__}`. Set different `reverse_name`.')
+                    field.type.DB.many_fields[rev_name].foreign_field = name
+                else:
+                    field.type.DB.many_fields[rev_name] = DBManyField(cls, name)
+
+        # check Many fields connected
+        for name, field in cls.DB.many_fields.items():
+            if not field.foreign_field or field.foreign_field not in field.foreign_table.DB.fields:
+                raise QuazyFieldTypeError(
+                    f'Cannot find reference from table `{field.foreign_table.__name__}` to table `{cls.__name__}` to connect with Many field `{name}`. Add field to source table or change field type to `ManyToMany`')
+
+        # check and connect ManyToMany fields
+        for name, field in cls.DB.many_to_many_fields.items():
+            if field.middle_table:
+                continue
+
+            middle_table_name = "{}{}".format(cls.__qualname__, name.capitalize())
+            middle_table_inner_name = "{}_{}".format(cls.DB.table, name)
+            rev_name = field.foreign_field or cls.DB.snake_name
+            if rev_name in field.foreign_table.DB.many_to_many_fields and field.foreign_table.DB.many_to_many_fields[
+                rev_name].foreign_table is not cls:
+                raise QuazyFieldNameError(
+                    f'Cannot reuse ManyToMany field in table `{field.foreign_table.__name__}` with name `{rev_name}`, it is associated with table `{field.foreign_table.DB.many_to_many_fields[rev_name].source_table.__name__}`. Set different `reverse_name`.')
+
+            f1 = DBField(field.foreign_table.DB.table, indexed=True)
+            f1.prepare(f1.column)
+            f1.type = field.foreign_table
+            f1.ref = True
+            f2 = DBField(cls.DB.table, indexed=True)
+            f2.prepare(f2.column)
+            f2.type = cls
+            f2.ref = True
+
+            TableClass: type[DBTable] = typing.cast(type[DBTable],
+                                                    type(middle_table_name, (DBTable,), {
+                                                        '__qualname__': middle_table_name,
+                                                        '__module__': cls.__module__,
+                                                        '__annotate_func__': lambda f: {
+                                                            f1.name: f1.type,
+                                                            f2.name: f2.type
+                                                        },
+                                                        '__annotations__': {
+                                                            f1.name: f1.type,
+                                                            f2.name: f2.type
+                                                        },
+                                                        '_table_': middle_table_inner_name,
+                                                        f1.name: f1,
+                                                        f2.name: f2,
+                                                    }))
+
+            add_middle_table(TableClass)
+
+            field.middle_table = TableClass
+            field.foreign_field = rev_name
+            field.foreign_table.DB.many_to_many_fields[rev_name].middle_table = TableClass
+            field.foreign_table.DB.many_to_many_fields[rev_name].foreign_field = name
 
 
 class DBTable(metaclass=MetaTable):
@@ -323,173 +492,6 @@ class DBTable(metaclass=MetaTable):
             actual_fields = fields + ('pk',) if fields else ()
             self[:] = self._db.query(self._table).select(*actual_fields).filter(lambda x: getattr(x, self._field_name) == self._pk_value).fetch_all()
             return self
-
-    @classmethod
-    def resolve_types(cls, globalns):
-        """Resolve fields types from annotations
-
-        :meta private:"""
-        # eval annotations
-        if sys.version_info >= (3, 14):
-            annotations = annotationlib.get_annotations(cls, format=annotationlib.Format.FORWARDREF)
-        else:
-            annotations = cls.__annotations__
-
-        type_hints = typing.get_type_hints(cls, globalns)
-        for name, t in type_hints.items():
-            if name not in cls.DB.fields:  # or cls.fields[name].type is not None:
-                continue
-            field: DBField = cls.DB.fields[name]
-            annotation = annotations.get(name, None)
-            if cls.resolve_type(t, annotation, field, globalns):
-                setattr(cls, name, list())
-                del cls.DB.fields[name]
-
-        # eval owner
-        if isinstance(cls.DB.owner, str):
-            base_cls: type[DBTable] = getattr(sys.modules[cls.__module__], cls.DB.owner)
-            # field_name = camel2snake(cls.__name__)
-            field = DBField()
-            field.prepare(base_cls.DB.table)
-            field.type = base_cls
-            field.ref = True
-            field.required = True
-            cls.DB.owner = base_cls
-            cls.DB.fields[field.column] = field
-
-        # resolve types for subclasses
-        for name, t in vars(cls).items():
-            if inspect.isclass(t) and issubclass(t, DBTable):
-                cls.DB.subtables[t.DB.snake_name] = t
-                t.DB.schema = cls.DB.schema
-                t.DB.db = cls.DB.db
-                t.resolve_types(globalns)
-
-    @classmethod
-    def resolve_type(cls, t: type, ta: type | None, field: DBField, globalns) -> bool | None:
-        """Resolve field types from annotations
-
-        :meta private:"""
-        if inspect.isclass(t) and issubclass(t, DBField):
-            # import custom field attributes
-            for k, v in t.__dict__.items():
-                if k.startswith('_'):
-                    continue
-                if issubclass(v, UX):
-                    for kk, vv in v.__dict__.items():
-                        if not kk.startswith('_'):
-                            setattr(field.ux, kk, vv)
-                else:
-                    setattr(field, k, v)
-
-        elif (ta is not None and
-              (isinstance(ta, typing._AnnotatedAlias) and (meta_name:=ta.__metadata__[0]) or
-               isinstance(ta, str) and (meta_name:=get_annotated_id(ta)) is not None)):
-            if meta_name == 'FieldCID':
-                field.type = t
-            elif meta_name == 'Property':
-                field.property = True
-                field.required = False
-                cls.resolve_type(t, None, field, globalns)
-            elif meta_name in ('Many', 'ManyToMany'):
-                field_type = t.__args__[0]
-                if not inspect.isclass(field_type) or not issubclass(field_type, DBTable):
-                    raise QuazyFieldTypeError(f'Many type `{t}` should be referenced to another DBTable')
-                if meta_name == 'Many':
-                    cls.DB.many_fields[field.name] = DBManyField(field_type, field.reverse_name)
-                else:
-                    cls.DB.many_to_many_fields[field.name] = DBManyToManyField(field_type, field.reverse_name)
-                return True
-
-        elif isinstance(t, typing._UnionGenericAlias) or isinstance(t, types.UnionType):
-            if len(args:=typing.get_args(t)) == 2 and args[1] is type(None):
-                # 'Optional' annotation
-                field.required = False
-                DBTable.resolve_type(args[0], None, field, globalns)
-
-        elif t is FieldBody:
-            field.type = dict
-
-        elif inspect.isclass(t) and issubclass(t, DBTable):
-            # Foreign key
-            field.ref = True
-            field.type = t
-
-        elif t in KNOWN_TYPES or inspect.isclass(t) and issubclass(t, Enum):
-            # Base type
-            field.type = t
-
-        else:
-            raise QuazyFieldTypeError(f'type `{t}` is not supported as field type for `{cls.__qualname__}.{field.name}`')
-
-    @classmethod
-    def resolve_types_many(cls, add_middle_table: Callable[[type[DBTable]], Any]):
-        """Resolve referred types from annotations
-
-        :meta private:"""
-        # eval refs
-        for name, field in cls.DB.fields.items():
-            if field.ref:
-                rev_name = field.reverse_name or cls.DB.snake_name
-                if rev_name in field.type.DB.many_fields:
-                    if field.type.DB.many_fields[rev_name].foreign_table is not cls:
-                        raise QuazyFieldNameError(
-                            f'Cannot reuse Many field in table `{field.type.__name__}` with name `{rev_name}`, it is associated with table `{field.type.DB.many_fields[rev_name].source_table.__name__}`. Set different `reverse_name`.')
-                    field.type.DB.many_fields[rev_name].foreign_field = name
-                else:
-                    field.type.DB.many_fields[rev_name] = DBManyField(cls, name)
-
-        # check Many fields connected
-        for name, field in cls.DB.many_fields.items():
-            if not field.foreign_field or field.foreign_field not in field.foreign_table.DB.fields:
-                raise QuazyFieldTypeError(
-                    f'Cannot find reference from table `{field.foreign_table.__name__}` to table `{cls.__name__}` to connect with Many field `{name}`. Add field to source table or change field type to `ManyToMany`')
-
-        # check and connect ManyToMany fields
-        for name, field in cls.DB.many_to_many_fields.items():
-            if field.middle_table:
-                continue
-
-            middle_table_name = "{}{}".format(cls.__qualname__, name.capitalize())
-            middle_table_inner_name = "{}_{}".format(cls.DB.table, name)
-            rev_name = field.foreign_field or cls.DB.snake_name
-            if rev_name in field.foreign_table.DB.many_to_many_fields and field.foreign_table.DB.many_to_many_fields[
-                rev_name].foreign_table is not cls:
-                raise QuazyFieldNameError(
-                    f'Cannot reuse ManyToMany field in table `{field.foreign_table.__name__}` with name `{rev_name}`, it is associated with table `{field.foreign_table.DB.many_to_many_fields[rev_name].source_table.__name__}`. Set different `reverse_name`.')
-
-            f1 = DBField(field.foreign_table.DB.table, indexed=True)
-            f1.prepare(f1.column)
-            f1.type = field.foreign_table
-            f1.ref = True
-            f2 = DBField(cls.DB.table, indexed=True)
-            f2.prepare(f2.column)
-            f2.type = cls
-            f2.ref = True
-
-            TableClass: type[DBTable] = typing.cast(type[DBTable],
-                                                    type(middle_table_name, (DBTable,), {
-                                                        '__qualname__': middle_table_name,
-                                                        '__module__': cls.__module__,
-                                                        '__annotate_func__': lambda f: {
-                                                            f1.name: f1.type,
-                                                            f2.name: f2.type
-                                                        },
-                                                        '__annotations__': {
-                                                            f1.name: f1.type,
-                                                            f2.name: f2.type
-                                                        },
-                                                        '_table_': middle_table_inner_name,
-                                                        f1.name: f1,
-                                                        f2.name: f2,
-                                                    }))
-
-            add_middle_table(TableClass)
-
-            field.middle_table = TableClass
-            field.foreign_field = rev_name
-            field.foreign_table.DB.many_to_many_fields[rev_name].middle_table = TableClass
-            field.foreign_table.DB.many_to_many_fields[rev_name].foreign_field = name
 
     @classmethod
     def setup_validators(cls):

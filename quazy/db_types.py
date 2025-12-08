@@ -16,6 +16,9 @@ __all__ = ['Optional', 'datetime', 'timedelta', 'date', 'time', 'Decimal', 'UUID
            'db_type_name', 'db_type_by_name', 'FieldCID', 'FieldBody', 'Property', 'ManyToMany', 'IntEnum', 'StrEnum',
            'Enum', 'Text']
 
+if typing.TYPE_CHECKING:
+    from .db_table import DBTable
+
 
 class DefaultValue:
     pass
@@ -53,6 +56,7 @@ Many = typing.Annotated[list[T], "Many"]
 ManyToMany = typing.Annotated[list[T], "ManyToMany"]
 FieldCID = typing.Annotated[T, 'FieldCID']
 Property = typing.Annotated[T, 'Property']
+ObjVar = typing.Annotated[T, 'ObjVar']
 
 class FieldBody:
     pass

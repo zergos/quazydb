@@ -10,12 +10,11 @@ import inspect
 from collections import defaultdict
 from contextlib import contextmanager
 
-from more_itertools.recipes import factor
-
 from .exceptions import *
 from .db_table import *
 from .db_field import *
 from .db_types import *
+from .db_types import T
 from .translator import Translator
 
 import typing
@@ -24,43 +23,9 @@ if typing.TYPE_CHECKING:
     from typing import *
     from types import SimpleNamespace
     from .db_query import DBQuery, DBSQL
-
+    from .db_protocol import *
 
 __all__ = ['DBFactory']
-
-
-T = typing.TypeVar('T', bound='DBTable')
-
-DBRowFactoryLike = 'Callable[[type[DBTable] | None], type]'
-DBRowLike = DBTable | tuple | dict
-
-class DBCopyLike(typing.Protocol):
-    """Protocol for database copy"""
-    def write_row(self, values: tuple): ...
-
-class DBCursorLike(typing.Protocol):
-    """Protocol for database cursor"""
-    description: Sequence[tuple[str, ...]] | None
-    def execute(self, sql: str, values: Optional[Sequence[Any]] = None) -> Iterator[SimpleNamespace | dict[str, Any] | DBTable]: ...
-    def fetchone(self) -> Optional[tuple[Any]]: ...
-    def fetchall(self) -> list[tuple[Any]]: ...
-    def copy(self, sql: str) -> ContextManager[DBCopyLike]: ...
-
-class DBConnectionLike(typing.Protocol):
-    """Protocol for database connection"""
-    def cursor(self, binary: bool, row_factory: type) -> ContextManager[DBCursorLike]: ...
-    def execute(self, sql: str, values: Optional[Sequence[Any]] = None) -> Iterable[Any]: ...
-    def executemany(self, sql: str, values: Sequence[Sequence[Any]]) -> Iterable[Any]: ...
-    def executescript(self, sql: str) -> Iterable[Any]: ...
-    def transaction(self) -> ContextManager[None]: ...
-    def commit(self) -> None: ...
-
-class DBPoolLike(typing.Protocol):
-    """Protocol for database pool"""
-    def getconn(self) -> DBConnectionLike: ...
-    def putconn(self, conn: DBConnectionLike) -> None: ...
-    def connection(self) -> ContextManager[DBConnectionLike]: ...
-
 
 class DBFactory:
     """Basic database factory class

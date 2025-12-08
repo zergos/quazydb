@@ -10,9 +10,10 @@ from collections import OrderedDict
 from enum import Enum
 import copy
 
-from .db_factory import DBFactory, T
+from .db_factory import DBFactory
 from .db_table import DBTable
 from .db_field import DBField
+from .db_types import T
 from .exceptions import *
 
 if typing.TYPE_CHECKING:

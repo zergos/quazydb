@@ -516,8 +516,8 @@ There is an opportunity to create evaluated fields, just in case storing is not 
 ..  code-block:: python
 
     class Test(DBTable):
-    a: int
-    b: int
+        a: int
+        b: int
 
     # regular field, defined as property for runtime evaluation
     @property
@@ -551,4 +551,38 @@ There is SQL generated::
     FROM "public"."test" AS "test"
     WHERE
         "test".a+"test".b=%(_arg_1)s AND "test".a*"test".b=%(_arg_2)s
+
+
+Class variables
+===============
+
+`Quazy` ignores class variables annotated as `ClassVar[]`, and `ObjVar[]` also.
+
+..  code-block:: python
+
+    class Config(DBTable):
+        obj: ClassVar['Config'] = None
+        data: dict
+
+        @classmethod
+        def __class_getitem__(cls, item):
+            if cls.obj is None:
+                cls.obj = Config.query().fetch_one()
+                if cls.obj is None:
+                    cls.obj = Config(data={'last_request': datetime.now()}).save()
+            return cls.obj.data[item]
+
+        @classmethod
+        def __class_setitem__(cls, item, value):
+            cls.obj.date[item] = value
+            cls.obj.save()
+
+    class Statefull(DBTable):
+        a: int
+        b: int
+        state: ObjVar[str]
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.state = "pre-processing"
 
