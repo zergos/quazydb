@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import inspect
+from inspect import isclass
 
 from .db_types import *
 from .translator import Translator
@@ -249,6 +250,8 @@ class TranslatorPSQL(Translator):
         defailt_fields = []
         idx = 1
         for field, value in fields:
+            if not isclass(value) and callable(value):
+                value = value()
             if not field.property:  # attr
                 if field.default_sql or field.body:
                     continue
@@ -257,27 +260,30 @@ class TranslatorPSQL(Translator):
                         sql_values.append('DEFAULT')
                     else:
                         defailt_fields.append(field)
-                elif value is DefaultValue:
-                    if field.default is object:
+                elif value is DefaultValue or value is Unassigned:
+                    if field.default is Unassigned:
                         # sql_values.append('DEFAULT')
                         defailt_fields.append(field)
                     else:
                         sql_values.append(cls.place_arg(f'v{idx}'))
                         if not callable(field.default):
-                            values[f'v{idx}'] = field.default
+                            values[f'v{idx}'] = cls.get_value(field, field.default)
                         else:
-                            values[f'v{idx}'] = field.default(item)
+                            values[f'v{idx}'] = cls.get_value(field, field.default(item))
                         idx += 1
                 else:
                     sql_values.append(cls.place_arg(f'v{idx}'))
-                    values[f'v{idx}'] = cls.get_value(field, value)
+                    if not callable(value):
+                        values[f'v{idx}'] = cls.get_value(field, value)
+                    else:
+                        values[f'v{idx}'] = cls.get_value(field, value())
                     idx += 1
 
             else:  # prop
                 if field.default_sql:
                     body_values[field.name] = field.default_sql
                 elif value is DefaultValue:
-                    if field.default in None:
+                    if field.default is None:
                         body_values[field.name] = 'null'
                     else:
                         body_values[field.name] = cls.json_serialize(field, cls.place_arg(f'v{idx}'))
@@ -297,7 +303,7 @@ class TranslatorPSQL(Translator):
                            if not field.default_sql and not field.property and not field.body
                            and field not in defailt_fields
                            )
-        if not columns:
+        if not columns and not body_values:
             return f'INSERT INTO {cls.table_name(item)} DEFAULT VALUES RETURNING "{item.DB.pk.column}"', ()
 
         row = ','.join(sql_values)

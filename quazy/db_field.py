@@ -7,7 +7,10 @@ if typing.TYPE_CHECKING:
     from typing import *
     from .db_table import DBTable
 
-__all__ = ['DBField', 'UX']
+__all__ = ['DBField', 'UX', 'Unassigned']
+
+class Unassigned:
+    pass
 
 @dataclass
 class DBField:
@@ -41,7 +44,7 @@ class DBField:
     required: bool = data_field(default=True, init=False)
     indexed: bool = False
     unique: bool = False
-    default: Union[Any, Callable[[DBTable], Any]] = object
+    default: Union[Any, Callable[[DBTable], Any]] = Unassigned
     default_sql: str = None
     reverse_name: str = None
     # many_field: bool = data_field(default=False, init=False)

@@ -10,11 +10,11 @@ try:
 except ImportError:
     from strenum import StrEnum  # noqa
 
-from .db_field import DBField, UX
+from .db_field import DBField, UX, Unassigned
 
 __all__ = ['Optional', 'datetime', 'timedelta', 'date', 'time', 'Decimal', 'UUID', 'Many', 'DefaultValue', 'KNOWN_TYPES',
            'db_type_name', 'db_type_by_name', 'FieldCID', 'FieldBody', 'Property', 'ManyToMany', 'IntEnum', 'StrEnum',
-           'Enum', 'Text']
+           'Enum', 'Text', 'Unassigned']
 
 if typing.TYPE_CHECKING:
     from .db_table import DBTable
@@ -22,7 +22,6 @@ if typing.TYPE_CHECKING:
 
 class DefaultValue:
     pass
-
 
 KNOWN_TYPES = (
     int, str, float, bool, bytes,

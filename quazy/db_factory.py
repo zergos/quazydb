@@ -10,11 +10,13 @@ import inspect
 from collections import defaultdict
 from contextlib import contextmanager
 
+from sphinx.util.inspect import isclass
+
 from .exceptions import *
 from .db_table import *
 from .db_field import *
 from .db_types import *
-from .db_types import T
+from .db_types import T, Unassigned
 from .translator import Translator
 
 import typing
@@ -201,7 +203,7 @@ class DBFactory:
                 __import__(name)
                 globalns = vars(sys.modules[name])
         else:
-            globalns = sys._getframe(1).f_locals
+            globalns = sys._getframe(1).f_globals
         if s := globalns.get('_SCHEMA_'):
             schema = s
         tables: list[type[DBTable]] = list()
@@ -479,15 +481,20 @@ class DBFactory:
         for name, field in item.DB.fields.items():
             if field.cid:
                 fields.append((field, item.DB.discriminator))
+                continue
             elif field.body:
                 continue
-            elif field.required and not field.pk and field.default is object and not field.default_sql:
+            elif field.required and not field.pk and field.default is Unassigned and not field.default_sql:
                 value = getattr(item, name, None)
                 if value is None:
                     raise QuazyMissedField(f"Field `{name}` value is missed for `{item.__class__.__name__}`")
-                fields.append((field, value))
             else:
-                fields.append((field, getattr(item, name, DefaultValue)))
+                value = getattr(item, name, DefaultValue)
+            if not isclass(value) and callable(value):
+                # materialize values on saving
+                value = value()
+                object.__setattr__(item, name, value)
+            fields.append((field, value))
 
         with self.connection() as conn:
 
@@ -501,26 +508,27 @@ class DBFactory:
                     setattr(row, item.DB.table, item)
                     self.insert(row)
 
-            for field_name, field in item.DB.many_fields.items():
-                for row in getattr(item, field_name):
-                    if getattr(row, field.foreign_field) != item.pk:
-                        setattr(row, field.foreign_field, item.pk)
-                        self.save(row)
+            if not item.DB.use_slots:
+                for field_name, field in item.DB.many_fields.items():
+                    for row in getattr(item, field_name):
+                        if getattr(row, field.foreign_field) != item.pk:
+                            setattr(row, field.foreign_field, item.pk)
+                            self.save(row)
 
-            for field_name, field in item.DB.many_to_many_fields.items():
-                for row in getattr(item, field_name):
-                    if not row.pk:
-                        self.save(row)
+                for field_name, field in item.DB.many_to_many_fields.items():
+                    for row in getattr(item, field_name):
+                        if not row.pk:
+                            self.save(row)
 
-                new_indices_sql = self._translator.insert_many_index(field.middle_table, item.DB.table,
-                                                                     field.foreign_table.DB.table)
-                with conn.cursor() as curr:
-                    if self._translator.supports_copy:
-                        with curr.copy(new_indices_sql) as copy:
-                            for row in getattr(item, field_name):
-                                copy.write_row((item.pk, row.pk))
-                    else:
-                        curr.executemany(new_indices_sql, [(item.pk, row.pk) for row in getattr(item, field_name)])
+                    new_indices_sql = self._translator.insert_many_index(field.middle_table, item.DB.table,
+                                                                         field.foreign_table.DB.table)
+                    with conn.cursor() as curr:
+                        if self._translator.supports_copy:
+                            with curr.copy(new_indices_sql) as copy:
+                                for row in getattr(item, field_name):
+                                    copy.write_row((item.pk, row.pk))
+                        else:
+                            curr.executemany(new_indices_sql, [(item.pk, row.pk) for row in getattr(item, field_name)])
 
         item._after_insert(self)
         return item

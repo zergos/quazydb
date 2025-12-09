@@ -5,6 +5,7 @@ import re
 import sys
 import inspect
 import itertools
+from inspect import isclass
 
 if sys.version_info >= (3, 14):
     import annotationlib
@@ -39,7 +40,7 @@ def get_annotated_id(t: str) -> str | None:
     groups = get_annotated_id.r.match(t)
     return groups and groups.group(2)
 
-get_annotated_id.r = re.compile(r'''^(.*?)(Many|ManyToMany|Property|FieldCID|ClassVar)\[(.+?)]$''')
+get_annotated_id.r = re.compile(r'''^(.*?)(Many|ManyToMany|Property|FieldCID|ClassVar|ObjVar)\[(.+?)]$''')
 
 class MetaTable(type):
     db_base_class: type[DBTable.DB]
@@ -50,10 +51,11 @@ class MetaTable(type):
             return super().__new__(cls, clsname, bases, attrs)
 
         if 'DB' in attrs:
-            raise QuazyError(f'Should not define `DB` subclass directly in `{clsname}`, use `_name_` form')
+            raise QuazyError(f'Should not define `DB` subclass directly in `{clsname}`, use `_name_` attributes')
 
         spec_attrs = {}
-        for name in 'db table title schema just_for_typing extendable discriminator meta lookup_field validate'.split():
+        for name in ('db table title schema just_for_typing extendable discriminator'
+                     ' meta lookup_field validate metadata use_slots').split():
             src_name = f'_{name}_'
             if (value := attrs.pop(src_name, None)) is not None:
                 spec_attrs[name] = value
@@ -65,10 +67,15 @@ class MetaTable(type):
             raise QuazyError('`validate` attribute is set to `True`, but `pydantic` is not installed')
 
         DB = typing.cast(type[DBTable.DB], type(clsname + 'DB', (cls.db_base_class,), spec_attrs))
-        attrs['DB'] = DB
-
         DB.many_fields = dict()
         DB.many_to_many_fields = dict()
+        DB.defaults = dict()
+        attrs['DB'] = DB
+
+
+        if DB.use_slots:
+            attrs['__slots__'] = []
+
         MetaTable.collect_fields(bases, DB, attrs)
 
         qualname = attrs['__qualname__']
@@ -127,12 +134,24 @@ class MetaTable(type):
             if (isinstance(t, typing._GenericAlias) and t.__name__ == "ClassVar"
                 or isinstance(t, str) and get_annotated_id(t) == "ClassVar"):
                 continue
+            if DB.use_slots:
+                attrs['__slots__'].append(name)
             if (isinstance(t, typing._AnnotatedAlias) and t.__metadata__[0] == 'ObjVar'
                 or isinstance(t, str) and get_annotated_id(t) == 'ObjVar'):
+                if DB.use_slots:
+                    del attrs[name]
+                    attrs['__slots__'].append(name)
                 continue
-            field = attrs.pop(name, DBField())
+            if not DB.use_slots:
+                field = attrs.get(name, DBField())
+            else:
+                field = attrs.pop(name, DBField())
             if isinstance(field, DBField):
                 field.prepare(name)
+                if not DB.use_slots:
+                    attrs[name] = field.default
+                if field.default is not Unassigned:
+                    DB.defaults[name] = field.default
                 if field.pk:
                     has_pk = True
                     DB.pk = field
@@ -158,6 +177,7 @@ class MetaTable(type):
                 field = DBField(default=field)
                 field.prepare(name)
                 field.required = True
+                DB.defaults[name] = field.default
 
             fields[name] = field
 
@@ -173,6 +193,8 @@ class MetaTable(type):
             pk.ux.blank = True
             fields['id'] = pk
             DB.pk = pk
+            if DB.use_slots:
+                attrs['__slots__'].append('id')
 
         DB.fields = fields
 
@@ -245,7 +267,7 @@ class MetaTable(type):
             for k, v in t.__dict__.items():
                 if k.startswith('_'):
                     continue
-                if issubclass(v, UX):
+                if isclass(v) and issubclass(v, UX):
                     for kk, vv in v.__dict__.items():
                         if not kk.startswith('_'):
                             setattr(field.ux, kk, vv)
@@ -284,6 +306,8 @@ class MetaTable(type):
             # Foreign key
             field.ref = True
             field.type = t
+            if cls.DB.use_slots and field.name not in cls.DB.defaults:
+                cls.DB.defaults[field.name] = None
 
         elif t in KNOWN_TYPES or inspect.isclass(t) and issubclass(t, Enum):
             # Base type
@@ -377,7 +401,9 @@ class DBTable(metaclass=MetaTable):
         _discriminator_:   SQL safe CID value to specify table in extended mode
         _meta_:            mark the table as pure abstract, just for inheritance with common field set
         _lookup_field_:    specify field name for text search. For integrations only.
+        _use_slots_:       use slots for database fields (enabled by default)
         _validate_:        validate fields types using `pydantic` (default: True if `pydantic` is installed)
+        _metadata_:        any custom metadata
 
     Note:
         special field name `pk` is reserved as property for direct primary key access
@@ -391,7 +417,9 @@ class DBTable(metaclass=MetaTable):
     _discriminator_: typing.ClassVar[typing.Any]
     _meta_: typing.ClassVar[bool]
     _lookup_field_: typing.ClassVar[str]
+    _use_slots_: typing.ClassVar[bool]
     _validate_: typing.ClassVar[bool]
+    _metadata_: typing.ClassVar[dict[str, typing.Any]]
 
     # state attributes
     __slots__ = ('_db_', '_modified_fields_')
@@ -422,9 +450,12 @@ class DBTable(metaclass=MetaTable):
             many_fields:            dict of field sets, when this table is referred from another table
             many_to_many_fields:    dict of field sets, when two tables referred to each other
             fields:                 all fields dict
+            defaults:               default values for fields
             lookup_field:           field name for text search for integrations
+            use_slots:              use slots for database fields
             validate:               validate fields types using `pydantic`
             validators:             dict of validators for fields
+            metadata:               any custom metadata
         """
         db: typing.ClassVar[DBFactory]
         table: typing.ClassVar[str | None] = None
@@ -444,9 +475,12 @@ class DBTable(metaclass=MetaTable):
         many_fields: typing.ClassVar[dict[str, DBManyField] | None] = None
         many_to_many_fields: typing.ClassVar[dict[str, DBManyToManyField] | None] = None
         fields: typing.ClassVar[dict[str, DBField]]
+        defaults: typing.ClassVar[dict[str, typing.Any]]
         lookup_field: typing.ClassVar[str | None] = None
+        use_slots: typing.ClassVar[bool] = False
         validate: typing.ClassVar[bool] = VALIDATE_DATA
         validators: typing.ClassVar[dict[str, TypeAdapter[Any]]]
+        metadata: typing.ClassVar[dict[str, typing.Any]]
 
     class ItemGetter(typing.Generic[T]):
         def __init__(self, db: DBFactory, table: type[T], field_name: str, pk_value: Any, view: str = None):
@@ -516,23 +550,24 @@ class DBTable(metaclass=MetaTable):
         self_id = initial.get(self.DB.pk.name, None)
         object.__setattr__(self, self.DB.pk.name, None)
 
-        for field_name, field in self.DB.many_fields.items():
-            if self_id is not None:
-                object.__setattr__(self, field_name, DBTable.ListGetter(self._db_, field.foreign_table, field.foreign_field, self_id))
-            else:
-                object.__setattr__(self, field_name, list())
+        if not self.DB.use_slots:
+            for field_name, field in self.DB.many_fields.items():
+                if self_id is not None:
+                    object.__setattr__(self, field_name, DBTable.ListGetter(self._db_, field.foreign_table, field.foreign_field, self_id))
+                else:
+                    object.__setattr__(self, field_name, list())
 
-        for field_name, subtable in self.DB.subtables.items():
-            if self_id is not None:
-                object.__setattr__(self, field_name, DBTable.ListGetter(self._db_, subtable, self.DB.table, self_id))
-            else:
-                object.__setattr__(self, field_name, list())
+            for field_name, subtable in self.DB.subtables.items():
+                if self_id is not None:
+                    object.__setattr__(self, field_name, DBTable.ListGetter(self._db_, subtable, self.DB.table, self_id))
+                else:
+                    object.__setattr__(self, field_name, list())
 
-        for field_name, field in self.DB.many_to_many_fields.items():
-            if self_id is not None:
-                object.__setattr__(self, field_name, DBTable.ListGetter(self._db_, field.foreign_table, field.foreign_field, self_id))
-            else:
-                object.__setattr__(self, field_name, list())
+            for field_name, field in self.DB.many_to_many_fields.items():
+                if self_id is not None:
+                    object.__setattr__(self, field_name, DBTable.ListGetter(self._db_, field.foreign_table, field.foreign_field, self_id))
+                else:
+                    object.__setattr__(self, field_name, list())
 
     def __init__(self, **initial):
         """DBTable instance constructor
@@ -541,7 +576,7 @@ class DBTable(metaclass=MetaTable):
             **initial: fields initial values
         """
         self.__pre_init__(**initial)
-        for k, v in initial.copy().items():
+        for k, v in initial.items():
             if field := self.DB.fields.get(k):
                 if issubclass(field.type, Enum):
                     setattr(self, k, field.type(v) if v is not None else None)
@@ -551,6 +586,13 @@ class DBTable(metaclass=MetaTable):
                 raise QuazyFieldNameError(f'Wrong field name `{k}` in new instance of `{self.__class__.__name__}`')
 
             setattr(self, k, v)
+        if self.DB.use_slots:
+            for k, v in self.DB.defaults.items():
+                if k not in initial:
+                    if not callable(v):
+                        object.__setattr__(self, k, v)
+                    else:
+                        object.__setattr__(self, k, v(self))
         self._modified_fields_ = set(initial.keys())
 
     @classmethod

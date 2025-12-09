@@ -586,3 +586,52 @@ Class variables
             super().__init__(*args, **kwargs)
             self.state = "pre-processing"
 
+
+Note, that `Config` class declaration above is just an example not a recomended practice. Better approach is to use
+`properties`.
+
+..  code-block:: python
+
+    class Config(DBTable):
+        data: Body
+        last_request: Property[datetime] = lambda x: datetime.now()
+
+    c = Config().save()
+    print(c.last_request)
+
+
+Use slots
+=========
+
+To reduce memory consumption `QuazyDB` supports Python's `__slots__` system. It is optional and has usage limits.
+The most important limitation in ability to use reversed fields and many-to-many fields, as it is evaluated on
+second pass after all classes are materialized.
+
+..  code-block:: python
+
+    class Order(DBTable):
+        name: str
+
+    class Row(DBTable):
+        _use_slots_ = True
+        order: Order
+
+    o = Order(name="test")
+    o.rows.append(Row())
+    # it is OK
+
+Otherwise:
+
+..  code-block:: python
+
+    class Order(DBTable):
+        _use_slots_ = True
+        name: str
+
+    class Row(DBTable):
+        order: Order
+
+    o = Order(name="test")
+    o.rows.append(Row())
+    # AttributeError: 'Order' object has no attribute 'rows'
+
