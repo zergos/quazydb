@@ -357,7 +357,7 @@ class TranslatorPSQL(Translator):
             if sets_sql:
                 sets_sql += ', '
             body_value = ', '.join(props)
-            sets_sql += f'"{table.DB.body.column}" = "{table.DB.body.column}" || json_build_object({body_value})'
+            sets_sql += f'"{table.DB.body.column}" = "{table.DB.body.column}" || {cls.json_object_func_name}({body_value})'
 
         if query is None:
             where_sql = f'"{table.DB.pk.column}" = {cls.place_arg("pk")}'
