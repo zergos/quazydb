@@ -17,17 +17,17 @@ if typing.TYPE_CHECKING:
     from .db_query import DBQuery, DBSubqueryField
 
 SQLITE_ADAPTERS = [
-    (datetime, lambda dt: dt.isoformat()),
-    (date, lambda dt: dt.isoformat()),
-    (timedelta, lambda dt: str(dt)),
+    (datetime, lambda dt: dt.timestamp()),
+    (date, lambda dt: datetime.combine(dt, datetime.min.time()).timestamp()),
+    (timedelta, lambda dt: dt.total_seconds()),
     (bool, lambda dt: 'true' if dt else 'false'),
     (dict, lambda dt: json.dumps(dt)),
     (UUID, lambda dt: str(dt)),
 ]
 
 SQLITE_CONVERTERS = [
-    ("DATETIME", lambda dt: datetime.fromisoformat(dt.decode('ascii'))),
-    ("DATE", lambda dt: date.fromisoformat(dt.decode('ascii'))),
+    ("DATETIME", lambda dt: datetime.fromtimestamp(float(dt))),
+    ("DATE", lambda dt: date.fromtimestamp(float(dt))),
     ("TIMEDELTA", lambda dt: timedelta(seconds=float(dt))),
     ("BOOLEAN", lambda dt: dt == b'true'),
     ("JSON", lambda dt: json.loads(dt.decode('UTF-8'))),
@@ -75,14 +75,12 @@ class TranslatorSQLite(TranslatorPSQL):
     def json_serialize(cls, field: DBField, value: str) -> str:
         #if field.type is str:
         #    return value
-        if field.type in (str, int, float, bool, bytes, UUID):
-            return f'CAST({value} AS TEXT)'
+        if field.type in (str, int, float):
+            return repr(value)
         if field.ref:
             return cls.json_serialize(field.type.DB.pk, value)
-        if field.type in (datetime, timedelta):
-            return f'unixepoch({value})'
-        if field.type in (date, time):
-            return f'unixepoch({value})'
+        if field.type in (datetime, timedelta, date, time, bool, UUID):
+            return value
         raise QuazyFieldTypeError(f'Type `{field.type.__name__}` is not supported for serialization')
 
     @classmethod
@@ -90,19 +88,22 @@ class TranslatorSQLite(TranslatorPSQL):
         if field.type is str:
             return field_path
         if field.type in (int, float, bool, bytes, UUID):
-            return f'CAST({field_path} as {cls.type_cast(field)})'
+            return f'CAST ({field_path} AS {cls.type_cast(field)})'
         if field.ref:
             return cls.json_deserialize(field.type.DB.pk, field_path)
         if field.type is datetime:
-            return f'datetime({field_path}, "unixepoch")'
+            return f'CAST ({field_path} AS {cls.type_cast(field)})'
         if field.type is date:
-            return f'date({field_path}, "unixepoch")'
+            return f'CAST ({field_path} AS {cls.type_cast(field)})'
         if field.type is time:
-            return f'time({field_path}, "unixepoch")'
+            return f'CAST ({field_path} AS {cls.type_cast(field)})'
         #if field.type is timedelta:
         #    return f"({field_path} || ' seconds')::interval"
         raise QuazyFieldTypeError(f'Type `{field.type.__name__}` is not supported for serialization')
 
+    @classmethod
+    def json_merge(cls, field1: str, field2: str) -> str:
+        return f'json_patch({field1}, {field2})'
 
     @classmethod
     def pk_type_name(cls, ctype: type) -> str:
@@ -214,11 +215,11 @@ class ConnectionFactory(sqlite3.Connection):
         self.execute("PRAGMA foreign_keys = ON")
 
     @contextmanager
-    def cursor(self, binary: bool = False, row_factory = None):
-        cur = super().cursor()
-        cur.row_factory = row_factory
+    def cursor(self):
+        cur = super().cursor(factory=CursorFactory)
         yield cur
         cur.close()
+        self.commit()
 
     def execute(self, sql: str, values: Optional[Sequence[Any]] = ()) -> Iterable[Any]:
         if sql.startswith(MULTI_COMMANDS_MARK):
@@ -229,6 +230,13 @@ class ConnectionFactory(sqlite3.Connection):
     @contextmanager
     def transaction(self):
         yield
+
+class CursorFactory(sqlite3.Cursor):
+    def execute(self, sql: str, values: Optional[Sequence[Any]] = ()) -> Iterable[Any]:
+        if sql.startswith(MULTI_COMMANDS_MARK):
+            return self.executescript(sql[len(MULTI_COMMANDS_MARK):])
+        else:
+            return super().execute(sql, values)
 
 def register_sqlite_converters() -> None:
     for typ, conv in SQLITE_CONVERTERS:

@@ -5,7 +5,6 @@ import re
 import sys
 import inspect
 import itertools
-from inspect import isclass
 
 if sys.version_info >= (3, 14):
     import annotationlib
@@ -267,7 +266,7 @@ class MetaTable(type):
             for k, v in t.__dict__.items():
                 if k.startswith('_'):
                     continue
-                if isclass(v) and issubclass(v, UX):
+                if inspect.isclass(v) and issubclass(v, UX):
                     for kk, vv in v.__dict__.items():
                         if not kk.startswith('_'):
                             setattr(field.ux, kk, vv)

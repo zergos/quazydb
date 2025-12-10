@@ -33,6 +33,18 @@ class Translator(ABC):
 
     @classmethod
     @abstractmethod
+    def json_serialize(cls, field: DBField, value: str) -> str: ...
+
+    @classmethod
+    @abstractmethod
+    def json_deserialize(cls, field: DBField, field_path: str) -> str: ...
+
+    @classmethod
+    @abstractmethod
+    def json_merge(cls, field1: str, field2: str) -> str: ...
+
+    @classmethod
+    @abstractmethod
     def create_index(cls, table: type[DBTable], field: DBField) -> str: ...
 
     @classmethod

@@ -13,7 +13,7 @@ import copy
 from .db_factory import DBFactory
 from .db_table import DBTable
 from .db_field import DBField
-from .db_types import T
+from .db_types import T, KNOWN_TYPES
 from .exceptions import *
 
 if typing.TYPE_CHECKING:
@@ -637,6 +637,15 @@ class DBQuery(typing.Generic[T]):
         self.args[key] = value
         return DBSQL(self, self.db._translator.place_arg(key))
 
+    def sql(self, sql_text: str, *args: Any) -> DBSQL:
+        """Add raw SQL to query.
+
+        Arguments:
+            sql_text: SQL text to add
+            args: arguments to substitute in SQL text, place mark is {}
+        """
+        return DBSQL(self, sql_text.format(*(self.resolve(arg) for arg in args)))
+
     def __setitem__(self, key, value):
         """Set variable to value
 
@@ -672,7 +681,10 @@ class DBQuery(typing.Generic[T]):
                         return f(scheme)
                     elif (f:=getattr(self.table_class, expr, None)) and isinstance(f, property):
                         return f.fget(scheme)
-                return DBSQL(self, expr)
+                if len(expr) < 1024:
+                    return DBSQL(self, repr(expr))
+                else:
+                    return self.arg(expr)
             chunks = expr.split('.')
             sub_scheme = getattr(scheme, chunks[0])
             if len(chunks) == 1:
@@ -688,6 +700,8 @@ class DBQuery(typing.Generic[T]):
             if self.table_class != expr:
                 raise QuazyFieldTypeError(f'Can not filter table `{self.table_class.__qualname__}` by the instance of `{expr.__class__.__qualname__}`')
             return scheme.pk == expr
+        if type(expr) in KNOWN_TYPES:
+            return self.arg(expr)
         raise QuazyFieldTypeError('Expression type not supported')
 
     def with_query(self, subquery: DBQuery, not_materialized: bool = False) -> DBSubqueryField:
@@ -708,6 +722,7 @@ class DBQuery(typing.Generic[T]):
         Returns:
             `DBSubqueryField` with result field names directly accessible for expressions
         """
+        self.with_queries.extend(subquery.with_queries)
         self.with_queries.append(DBWithClause(subquery, not_materialized))
         for k, v in subquery.args.items():
             if k.startswith('_arg_'):

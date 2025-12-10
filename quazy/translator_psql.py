@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import inspect
-from inspect import isclass
 
 from .db_types import *
 from .translator import Translator
@@ -105,6 +104,10 @@ class TranslatorPSQL(Translator):
         if field.type is timedelta:
             return f"({field_path} || ' seconds')::interval"
         raise QuazyFieldTypeError(f'Type `{field.type.__name__}` is not supported for serialization')
+
+    @classmethod
+    def json_merge(cls, field1: str, field2: str) -> str:
+        return f'{field1} || {field2}'
 
     @classmethod
     def pk_type_name(cls, ctype: type) -> str:
@@ -250,7 +253,7 @@ class TranslatorPSQL(Translator):
         defailt_fields = []
         idx = 1
         for field, value in fields:
-            if not isclass(value) and callable(value):
+            if not inspect.isclass(value) and callable(value):
                 value = value()
             if not field.property:  # attr
                 if field.default_sql or field.body:
@@ -357,7 +360,9 @@ class TranslatorPSQL(Translator):
             if sets_sql:
                 sets_sql += ', '
             body_value = ', '.join(props)
-            sets_sql += f'"{table.DB.body.column}" = "{table.DB.body.column}" || {cls.json_object_func_name}({body_value})'
+            sets_sql += (f'"{table.DB.body.column}" = '+
+                        cls.json_merge(f'"{table.DB.body.column}"',
+                                       f'{cls.json_object_func_name}({body_value})'))
 
         if query is None:
             where_sql = f'"{table.DB.pk.column}" = {cls.place_arg("pk")}'
@@ -386,7 +391,7 @@ class TranslatorPSQL(Translator):
         sql = "WITH\n"
         with_blocks = []
         for sub in with_queries:
-            render = cls.select(sub.query)
+            render = cls.select(sub.query, is_root=False)
             render = render.replace(cls.arg_prefix + '_arg_', f'{cls.arg_prefix}_{cls.subquery_name(sub.query)}_arg_')
             block = f'{cls.subquery_name(sub.query)} AS {"NOT MATERIALIZED" if sub.not_materialized else ""} (\n{render})\n'
             with_blocks.append(block)
@@ -394,12 +399,12 @@ class TranslatorPSQL(Translator):
         return sql
 
     @classmethod
-    def select(cls, query: DBQuery, chained_mode: int = 0) -> str:
+    def select(cls, query: DBQuery, chained_mode: int = 0, is_root: bool = True) -> str:
         from .db_query import DBJoinKind, DBQueryField, DBQuery
         from .db_table import DBTable
 
         sql = ''
-        if chained_mode == 0 and query.with_queries:
+        if is_root and chained_mode == 0 and query.with_queries:
             sql += cls.with_select(query.with_queries)
 
         if chained_mode == 0 and query.chained_opts:
