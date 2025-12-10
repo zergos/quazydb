@@ -609,6 +609,8 @@ class DBTable(metaclass=MetaTable):
                     view = initial.pop(f'{k}__view', None)
                     object.__setattr__(self, k, DBTable.ItemGetter(self._db_, field.type, field.name, v.pk if isinstance(v, DBTable) else v, view))
                     continue
+                elif field.property and not cls.DB.db._translator.supports_cast_converter:
+                    v = cls.DB.db._translator.cast_value(field, v)
             object.__setattr__(self, k, v)
         self._modified_fields_ = set()
         return self

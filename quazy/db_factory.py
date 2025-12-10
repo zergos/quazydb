@@ -99,12 +99,13 @@ class DBFactory:
                     self.conn = psycopg.connect(conninfo, **kwargs)
                 return self.conn
             @contextmanager
-            def _cursor(self, _curr: DBCursorLike):
-                yield _curr
             def cursor(self, _curr: DBCursorLike=None) -> ContextManager[DBCursorLike]:
                 if _curr is not None:
-                    return self._cursor(_curr)
-                return self.connection().cursor(binary=True)
+                    yield _curr
+                else:
+                    with self.connection().cursor(binary=True) as curr:
+                        yield curr
+                        self.conn.commit()
 
         return DBFactory(PsycopgConnection(), TranslatorPSQL, namedtuple_row, dict_row, kwargs_row, debug_mode)
 
@@ -146,7 +147,6 @@ class DBFactory:
                 with self.connection() as conn:
                     with conn.cursor(binary=True) as curr:
                         yield curr
-                    conn.commit()
 
         return DBFactory(PsycopgPoolConnection(), TranslatorPSQL, namedtuple_row, dict_row, kwargs_row, debug_mode)
 
@@ -509,6 +509,7 @@ class DBFactory:
 
         with self.cursor(_curr) as curr:
             sql, values = self._translator.insert(item, fields)
+            if self._debug_mode: print(sql)
             item.pk = curr.execute(sql, values).fetchone()[0]
             item._modified_fields_.clear()
 

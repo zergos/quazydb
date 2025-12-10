@@ -10,6 +10,9 @@ if typing.TYPE_CHECKING:
     from .db_field import DBField
     from .db_query import DBQuery, DBSQL, DBQueryField, DBWithClause, DBSubqueryField
 
+class ArgStr(str):
+    pass
+
 class Translator(ABC):
     TYPES_MAP = {}
 
@@ -18,14 +21,17 @@ class Translator(ABC):
     supports_schema: bool = True
     supports_default: bool = True
     supports_copy: bool = True
+    supports_cast_converter: bool = True
 
     arg_prefix = '%('
     arg_suffix = ')s'
     arg_unnamed = '%s'
 
+    json_object_func_name = ""
+
     @classmethod
-    def place_arg(cls, arg: str) -> str:
-        return f'{cls.arg_prefix}{arg}{cls.arg_suffix}'
+    def place_arg(cls, arg: str) -> ArgStr:
+        return ArgStr(f'{cls.arg_prefix}{arg}{cls.arg_suffix}')
 
     @classmethod
     @abstractmethod
@@ -42,6 +48,10 @@ class Translator(ABC):
     @classmethod
     @abstractmethod
     def json_merge(cls, field1: str, field2: str) -> str: ...
+
+    @classmethod
+    @abstractmethod
+    def cast_value(cls, field: DBField, value: Any) -> Any: ...
 
     @classmethod
     @abstractmethod

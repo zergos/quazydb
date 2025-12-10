@@ -141,12 +141,12 @@ class DBSubqueryField:
                     self._query.table_class.DB.pk.column in self._subquery.fields):
                 DB: DBTable.DB = self._query.table_class.DB 
                 self._query.joins[self._path] = DBJoin(DBJoinKind.LEFT, self._subquery,
-                    f'"{DB.table}".{DB.pk.column} = "{self._path}".{DB.pk.column}')
+                    f'"{DB.table}"."{DB.pk.column}" = "{self._path}"."{DB.pk.column}"')
             else:
                 self._query.joins[self._path] = DBJoin(DBJoinKind.SOURCE, self._subquery)
 
         if item in self._subquery.fields:
-            return DBSQL(self._query, f'{self._path}.{item}')
+            return DBSQL(self._query, f'"{self._path}"."{item}"')
 
         raise QuazyFieldNameError(f'field {item} not found in query {self._subquery.__name__}')
 

@@ -4,7 +4,7 @@ import json
 import inspect
 
 from .db_types import *
-from .translator import Translator
+from .translator import Translator, ArgStr
 from .exceptions import *
 
 import typing
@@ -49,7 +49,7 @@ class TranslatorPSQL(Translator):
     arg_prefix = '%('
     arg_suffix = ')s'
 
-    json_object_func_name = 'json_build_object'
+    json_object_func_name = 'jsonb_build_object'
 
     @classmethod
     def type_name(cls, field: DBField, primary: bool = True) -> str:
@@ -75,32 +75,37 @@ class TranslatorPSQL(Translator):
 
     @classmethod
     def json_serialize(cls, field: DBField, value: str) -> str:
-        #if field.type is str:
-        #    return value
-        if field.type in (str, int, float, bool, bytes, UUID):
-            return f'{value}::text'
+        if field.type is str:
+            if type(value) is ArgStr:
+                return f'{value}::text'
+            else:
+                return repr(value)
+        if field.type in (int, float, bool, bytes, UUID):
+            if field.pk:
+                return value
+            return f'{value}::{cls.type_name(field)}'
         if field.ref:
             return cls.json_serialize(field.type.DB.pk, value)
         if field.type in (datetime, timedelta):
-            return f'CAST(extract(epoch from {value}) as integer)'
+            return f'CAST(extract(epoch from {value}) as bigint)'
         if field.type in (date, time):
-            return f'CAST(extract(epoch from {value}::timestamp) as integer)'
+            return f'CAST(extract(epoch from {value}::timestamp) as bigint)'
         raise QuazyFieldTypeError(f'Type `{field.type.__name__}` is not supported for serialization')
 
     @classmethod
     def json_deserialize(cls, field: DBField, field_path: str) -> str:
         if field.type is str:
-            return field_path
+            return f'{field_path}::text'
         if field.type in (int, float, bool, bytes, UUID):
             return f'CAST({field_path} as {cls.type_cast(field)})'
         if field.ref:
             return cls.json_deserialize(field.type.DB.pk, field_path)
         if field.type is datetime:
-            return f'to_timestamp(({field_path})::integer)'
+            return f'to_timestamp(({field_path})::bigint)'
         if field.type is date:
-            return f'date(to_timestamp({field_path}))'
+            return f'date(to_timestamp(({field_path})::bigint))'
         if field.type is time:
-            return f'to_timestamp(({field_path})::integer)::time'
+            return f'to_timestamp(({field_path})::bigint)::time'
         if field.type is timedelta:
             return f"({field_path} || ' seconds')::interval"
         raise QuazyFieldTypeError(f'Type `{field.type.__name__}` is not supported for serialization')

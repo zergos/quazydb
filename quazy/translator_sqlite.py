@@ -7,7 +7,7 @@ from collections import namedtuple
 from contextlib import contextmanager
 
 from .db_types import *
-from .translator_psql import TranslatorPSQL
+from .translator_psql import TranslatorPSQL, ArgStr
 from .exceptions import *
 
 if typing.TYPE_CHECKING:
@@ -25,14 +25,14 @@ SQLITE_ADAPTERS = [
     (UUID, lambda dt: str(dt)),
 ]
 
-SQLITE_CONVERTERS = [
-    ("DATETIME", lambda dt: datetime.fromtimestamp(float(dt))),
-    ("DATE", lambda dt: date.fromtimestamp(float(dt))),
-    ("TIMEDELTA", lambda dt: timedelta(seconds=float(dt))),
-    ("BOOLEAN", lambda dt: dt == b'true'),
-    ("JSON", lambda dt: json.loads(dt.decode('UTF-8'))),
-    ("UUID", lambda dt: UUID(dt.decode('ascii'))),
-]
+SQLITE_CONVERTERS = {
+    "DATETIME": lambda dt: datetime.fromtimestamp(float(dt)),
+    "DATE": lambda dt: date.fromtimestamp(float(dt)),
+    "TIMEDELTA": lambda dt: timedelta(seconds=float(dt)),
+    "BOOLEAN": lambda dt: dt == b'true',
+    "JSON": lambda dt: json.loads(dt.decode('UTF-8')),
+    "UUID": lambda dt: UUID(dt.decode('ascii')),
+}
 
 MULTI_COMMANDS_MARK = '--@\n'
 
@@ -60,6 +60,7 @@ class TranslatorSQLite(TranslatorPSQL):
     supports_schema = False
     supports_default = False
     supports_copy = False
+    supports_cast_converter = False
 
     json_object_func_name = 'json_object'
 
@@ -73,30 +74,23 @@ class TranslatorSQLite(TranslatorPSQL):
 
     @classmethod
     def json_serialize(cls, field: DBField, value: str) -> str:
-        #if field.type is str:
-        #    return value
-        if field.type in (str, int, float):
-            return repr(value)
+        if field.type is str:
+            if type(value) is ArgStr:
+                return value
+            else:
+                return repr(value)
         if field.ref:
             return cls.json_serialize(field.type.DB.pk, value)
-        if field.type in (datetime, timedelta, date, time, bool, UUID):
+        if field.type in (int, float, datetime, timedelta, date, time, bool, UUID):
             return value
         raise QuazyFieldTypeError(f'Type `{field.type.__name__}` is not supported for serialization')
 
     @classmethod
     def json_deserialize(cls, field: DBField, field_path: str) -> str:
-        if field.type is str:
+        if field.type in (str, int, float, bool, bytes, UUID, date, datetime, time):
             return field_path
-        if field.type in (int, float, bool, bytes, UUID):
-            return f'CAST ({field_path} AS {cls.type_cast(field)})'
         if field.ref:
             return cls.json_deserialize(field.type.DB.pk, field_path)
-        if field.type is datetime:
-            return f'CAST ({field_path} AS {cls.type_cast(field)})'
-        if field.type is date:
-            return f'CAST ({field_path} AS {cls.type_cast(field)})'
-        if field.type is time:
-            return f'CAST ({field_path} AS {cls.type_cast(field)})'
         #if field.type is timedelta:
         #    return f"({field_path} || ' seconds')::interval"
         raise QuazyFieldTypeError(f'Type `{field.type.__name__}` is not supported for serialization')
@@ -104,6 +98,13 @@ class TranslatorSQLite(TranslatorPSQL):
     @classmethod
     def json_merge(cls, field1: str, field2: str) -> str:
         return f'json_patch({field1}, {field2})'
+
+    @classmethod
+    def cast_value(cls, field: DBField, value: Any) -> Any:
+        if field.type in KNOWN_TYPES:
+            if (type_name:=cls.TYPES_MAP[field.type]) in SQLITE_CONVERTERS:
+                return SQLITE_CONVERTERS[type_name](value)
+        return value
 
     @classmethod
     def pk_type_name(cls, ctype: type) -> str:
@@ -239,7 +240,7 @@ class CursorFactory(sqlite3.Cursor):
             return super().execute(sql, values)
 
 def register_sqlite_converters() -> None:
-    for typ, conv in SQLITE_CONVERTERS:
+    for typ, conv in SQLITE_CONVERTERS.items():
         sqlite3.register_converter(typ, conv)
     for typ, conv in SQLITE_ADAPTERS:
         sqlite3.register_adapter(typ, conv)

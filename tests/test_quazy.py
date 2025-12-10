@@ -117,10 +117,10 @@ def configure_logging():
 if __name__ == '__main__':
     #configure_logging()
 
-    db = DBFactory.postgres_pool("postgresql://quazy:quazy@127.0.0.1/quazy")
-    #db = DBFactory.sqlite("file:quazy.db?mode=rwc")
+    #db = DBFactory.postgres("postgresql://quazy:quazy@127.0.0.1/quazy")
+    db = DBFactory.sqlite("file:quazy.db?mode=rwc")
 
-    db._debug_mode = True
+    #db._debug_mode = True
     db.bind_module()
 
     db.clear()
