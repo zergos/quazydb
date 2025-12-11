@@ -166,7 +166,7 @@ class TranslatorPSQL(Translator):
             #if not field.many_field and not field.prop
             if not field.property
         )
-        res = f'CREATE TABLE {cls.table_name(table)} ({cols})'
+        res = f'CREATE TABLE IF NOT EXISTS {cls.table_name(table)} ({cols})'
         return res
 
     @classmethod

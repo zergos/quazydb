@@ -459,7 +459,7 @@ class DBTable(metaclass=MetaTable):
             validators:             dict of validators for fields
             metadata:               any custom metadata
         """
-        db: typing.ClassVar[DBFactory]
+        db: typing.ClassVar[DBFactory] = None
         table: typing.ClassVar[str | None] = None
         title: typing.ClassVar[str | None] = None
         schema: typing.ClassVar[str | None] = None
