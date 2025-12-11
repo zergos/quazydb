@@ -50,12 +50,13 @@ TYPE_MAP = {
 
 
 T = typing.TypeVar('T', bound='DBTable')
+TANY = typing.TypeVar('TANY')
 
 Many = typing.Annotated[list[T], "Many"]
 ManyToMany = typing.Annotated[list[T], "ManyToMany"]
-FieldCID = typing.Annotated[T, 'FieldCID']
-Property = typing.Annotated[T, 'Property']
-ObjVar = typing.Annotated[T, 'ObjVar']
+FieldCID = typing.Annotated[TANY, 'FieldCID']
+Property = typing.Annotated[TANY, 'Property']
+ObjVar = typing.Annotated[TANY, 'ObjVar']
 
 class FieldBody:
     pass

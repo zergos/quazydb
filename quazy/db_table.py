@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import typing
 import types
 import re
@@ -221,13 +222,15 @@ class MetaTable(type):
         """Resolve fields types from annotations
 
         :meta private:"""
+        from .db_factory import DBFactory
+
         # eval annotations
         if sys.version_info >= (3, 14):
             annotations = annotationlib.get_annotations(cls, format=annotationlib.Format.FORWARDREF)
         else:
             annotations = cls.__annotations__
 
-        type_hints = typing.get_type_hints(cls, globalns)
+        type_hints = typing.get_type_hints(cls, globals() | globalns, {'DBFactory': DBFactory})
         for name, t in type_hints.items():
             if name not in cls.DB.fields:  # or cls.fields[name].type is not None:
                 continue
@@ -609,8 +612,8 @@ class DBTable(metaclass=MetaTable):
                     view = initial.pop(f'{k}__view', None)
                     object.__setattr__(self, k, DBTable.ItemGetter(self._db_, field.type, field.name, v.pk if isinstance(v, DBTable) else v, view))
                     continue
-                elif field.property and not cls.DB.db._translator.supports_cast_converter:
-                    v = cls.DB.db._translator.cast_value(field, v)
+                elif field.property and not cls.DB.db.translator.supports_cast_converter:
+                    v = cls.DB.db.translator.cast_value(field, v)
             object.__setattr__(self, k, v)
         self._modified_fields_ = set()
         return self

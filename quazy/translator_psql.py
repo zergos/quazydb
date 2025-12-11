@@ -66,12 +66,10 @@ class TranslatorPSQL(Translator):
         raise QuazyTranslatorException(f'Unsupported DB column type {field.name} ({field.type})')
 
     @classmethod
-    def type_cast(cls, field: DBField) -> str:
-        if field.type in cls.TYPES_MAP:
-            return cls.TYPES_MAP[field.type]
-        if field.ref:
-            return cls.type_cast(field.type.DB.pk)
-        raise QuazyTranslatorException(f'Unsupported DB column type {field.name} ({field.type})')
+    def type_cast(cls, expr: str, typ: type) -> str:
+        if typ in cls.TYPES_MAP:
+            return f'({expr})::{cls.TYPES_MAP[typ]}'
+        raise QuazyTranslatorException(f'Unsupported type ({typ})')
 
     @classmethod
     def json_serialize(cls, field: DBField, value: str) -> str:
@@ -97,7 +95,7 @@ class TranslatorPSQL(Translator):
         if field.type is str:
             return f'{field_path}::text'
         if field.type in (int, float, bool, bytes, UUID):
-            return f'CAST({field_path} as {cls.type_cast(field)})'
+            return cls.type_cast(field_path, field.type)
         if field.ref:
             return cls.json_deserialize(field.type.DB.pk, field_path)
         if field.type is datetime:
@@ -136,16 +134,6 @@ class TranslatorPSQL(Translator):
             if field.type is UUID:
                 res.append('DEFAULT gen_random_uuid()')
         return ' '.join(res)
-
-    @classmethod
-    def table_name(cls, table: type[DBTable]) -> str:
-        schema = table.DB.schema + '"."' if table.DB.schema else ''
-        return f'"{schema}{table.DB.table}"'
-
-    @classmethod
-    def table_name2(cls, schema: str, table_name: str) -> str:
-        schema =  schema + '"."' if schema else ''
-        return f'"{schema}{table_name}"'
 
     @classmethod
     def subquery_name(cls, subquery: DBQuery) -> str:
@@ -208,7 +196,7 @@ class TranslatorPSQL(Translator):
 
     @classmethod
     def rename_table(cls, schema: str, old_table_name: str, new_table_name: str) -> str:
-        res = f"ALTER TABLE {cls.table_name2(schema, old_table_name)} RENAME TO \"{new_table_name}\""
+        res = f"ALTER TABLE {cls.table_name_by_schema(schema, old_table_name)} RENAME TO \"{new_table_name}\""
         return res
 
     @classmethod

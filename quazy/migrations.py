@@ -29,7 +29,7 @@ class Migration(DBTable):
         active: is migration active
         reversed: is migration reversed
     """
-    created_at: datetime = DBField(default_sql="now()")
+    created_at: datetime = lambda x: datetime.now()
     schema: str
     index: str
     next_index: str | None
@@ -365,108 +365,107 @@ def apply_changes(db: DBFactory, diff: MigrationDifference, comments: str = "", 
 
     trans = db._translator
     with db.connection() as conn:
-        with conn.transaction():
-            for command in diff.commands:
-                print(f"Apply command: {command}... ", end='')
-                match command.command:
-                    case MigrationType.ADD_TABLE:
-                        conn.execute(trans.create_table(command.arguments[0]))
-                        for field in command.arguments[0].DB.fields.values():
+        for command in diff.commands:
+            print(f"Apply command: {command}... ", end='')
+            match command.command:
+                case MigrationType.ADD_TABLE:
+                    conn.execute(trans.create_table(command.arguments[0]))
+                    for field in command.arguments[0].DB.fields.values():
+                        if field.ref:
+                            conn.execute(trans.add_reference(command.arguments[0], field))
+
+                case MigrationType.DELETE_TABLE:
+                    for field in command.arguments[0].DB.fields.values():
+                        if field.ref:
+                            conn.execute(trans.drop_reference(command.arguments[0], field))
+                    conn.execute(trans.drop_table(command.arguments[0]))
+
+                case MigrationType.RENAME_TABLE:
+                    conn.execute(trans.rename_table(*command.arguments))
+
+                case MigrationType.ADD_FIELD:
+                    conn.execute(trans.add_field(*command.arguments))
+                    if command.arguments[1].ref:
+                        conn.execute(trans.add_reference(*command.arguments))
+
+                case MigrationType.DELETE_FIELD:
+                    if command.arguments[1].ref:
+                        conn.execute(trans.drop_reference(*command.arguments))
+                    conn.execute(trans.drop_field(*command.arguments))
+
+                case MigrationType.RENAME_FIELD:
+                    conn.execute(trans.rename_field(*command.arguments))
+
+                case MigrationType.ALTER_FIELD_TYPE:
+                    conn.execute(trans.alter_field_type(command.arguments[0], command.arguments[1]))
+
+                case MigrationType.ALTER_FIELD_FLAG:
+                    table, field, flag, value = command.arguments
+                    match flag:
+                        case 'pk':
+                            raise QuazyNotSupported
+                        case 'cid':
+                            raise QuazyNotSupported
+                        case 'prop':
+                            raise QuazyNotSupported
+                        case 'required':
                             if field.ref:
-                                conn.execute(trans.add_reference(command.arguments[0], field))
-
-                    case MigrationType.DELETE_TABLE:
-                        for field in command.arguments[0].DB.fields.values():
-                            if field.ref:
-                                conn.execute(trans.drop_reference(command.arguments[0], field))
-                        conn.execute(trans.drop_table(command.arguments[0]))
-
-                    case MigrationType.RENAME_TABLE:
-                        conn.execute(trans.rename_table(*command.arguments))
-
-                    case MigrationType.ADD_FIELD:
-                        conn.execute(trans.add_field(*command.arguments))
-                        if command.arguments[1].ref:
-                            conn.execute(trans.add_reference(*command.arguments))
-
-                    case MigrationType.DELETE_FIELD:
-                        if command.arguments[1].ref:
-                            conn.execute(trans.drop_reference(*command.arguments))
-                        conn.execute(trans.drop_field(*command.arguments))
-
-                    case MigrationType.RENAME_FIELD:
-                        conn.execute(trans.rename_field(*command.arguments))
-
-                    case MigrationType.ALTER_FIELD_TYPE:
-                        conn.execute(trans.alter_field_type(command.arguments[0], command.arguments[1]))
-
-                    case MigrationType.ALTER_FIELD_FLAG:
-                        table, field, flag, value = command.arguments
-                        match flag:
-                            case 'pk':
-                                raise QuazyNotSupported
-                            case 'cid':
-                                raise QuazyNotSupported
-                            case 'prop':
-                                raise QuazyNotSupported
-                            case 'required':
-                                if field.ref:
-                                    conn.execute(trans.drop_reference(table, field))
-                                    conn.execute(trans.add_reference(table, field))
-                                else:
-                                    if value:
-                                        conn.execute(trans.set_not_null(table, field))
-                                    else:
-                                        conn.execute(trans.drop_not_null(table, field))
-                            case 'indexed':
+                                conn.execute(trans.drop_reference(table, field))
+                                conn.execute(trans.add_reference(table, field))
+                            else:
                                 if value:
-                                    conn.execute(trans.create_index(table, field))
+                                    conn.execute(trans.set_not_null(table, field))
                                 else:
-                                    conn.execute(trans.drop_index(table, field))
-                            case 'unique':
-                                if value:
-                                    conn.execute(trans.create_index(table, field))
-                                else:
-                                    conn.execute(trans.drop_index(table, field))
-                            case 'default_sql':
-                                conn.execute(trans.set_default_value(table, field, value))
-                print("Done")
+                                    conn.execute(trans.drop_not_null(table, field))
+                        case 'indexed':
+                            if value:
+                                conn.execute(trans.create_index(table, field))
+                            else:
+                                conn.execute(trans.drop_index(table, field))
+                        case 'unique':
+                            if value:
+                                conn.execute(trans.create_index(table, field))
+                            else:
+                                conn.execute(trans.drop_index(table, field))
+                        case 'default_sql':
+                            conn.execute(trans.set_default_value(table, field, value))
+            print("Done")
 
-            # set migration statuses
-            last_mig = db.get(Migration, active=True)
-            if diff.migration_index is None:
-                max_index = db.query(Migration).filter(lambda x: x.schema == schema).fetch_max(lambda x: x.index.as_integer)
-                next_index = f'{max_index+1:04d}'
-                save_migration(next_index)
-                if last_mig:
-                    last_mig.active = False
-                    last_mig.next_index = next_index
-                    last_mig.save()
-            else:
-                if int(diff.migration_index) < int(last_mig.index):
-                    q = db.query(Migration).chained("index", "next_index", diff.migration_index)
-                    for x in q:
-                        if x.index > diff.migration_index:
-                            x.active = False
-                            x.reversed = True
-                        else:
-                            x.active = True
-                        x.save()
-                        if x.index == last_mig.index:
-                            break
+    # set migration statuses
+    last_mig = db.get(Migration, active=True)
+    if diff.migration_index is None:
+        max_index = db.query(Migration).filter(lambda x: x.schema == schema).fetch_max(lambda x: x.index.as_integer)
+        next_index = f'{max_index+1:04d}'
+        save_migration(next_index)
+        if last_mig:
+            last_mig.active = False
+            last_mig.next_index = next_index
+            last_mig.save()
+    else:
+        if int(diff.migration_index) < int(last_mig.index):
+            q = db.query(Migration).chained("index", "next_index", diff.migration_index)
+            for x in q:
+                if x.index > diff.migration_index:
+                    x.active = False
+                    x.reversed = True
                 else:
-                    q = db.query(Migration).chained("index", "next_index", last_mig.index)
-                    for x in q:
-                        x.reversed = False
-                        if x.index == diff.migration_index:
-                            x.active = True
-                            x.save()
-                            break
-                        else:
-                            x.active = False
-                        x.save()
+                    x.active = True
+                x.save()
+                if x.index == last_mig.index:
+                    break
+        else:
+            q = db.query(Migration).chained("index", "next_index", last_mig.index)
+            for x in q:
+                x.reversed = False
+                if x.index == diff.migration_index:
+                    x.active = True
+                    x.save()
+                    break
+                else:
+                    x.active = False
+                x.save()
 
-            print("Complete")
+    print("Complete")
 
 
 def dump_changes(db: DBFactory, schema: str, directory: str):

@@ -34,8 +34,14 @@ class Translator(ABC):
         return ArgStr(f'{cls.arg_prefix}{arg}{cls.arg_suffix}')
 
     @classmethod
-    @abstractmethod
-    def table_name(cls, table: type[DBTable]) -> str: ...
+    def table_name(cls, table: type[DBTable]) -> str:
+        schema = table.DB.schema + '"."' if cls.supports_schema and table.DB.schema else ''
+        return f'"{schema}{table.DB.table}"'
+
+    @classmethod
+    def table_name_by_schema(cls, schema: str, table_name: str) -> str:
+        schema =  schema + '"."' if cls.supports_schema and schema else ''
+        return f'"{schema}{table_name}"'
 
     @classmethod
     @abstractmethod
@@ -52,6 +58,10 @@ class Translator(ABC):
     @classmethod
     @abstractmethod
     def cast_value(cls, field: DBField, value: Any) -> Any: ...
+
+    @classmethod
+    @abstractmethod
+    def type_cast(cls, expr: str, typ: type) -> str: ...
 
     @classmethod
     @abstractmethod

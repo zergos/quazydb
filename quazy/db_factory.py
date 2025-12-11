@@ -70,6 +70,11 @@ class DBFactory:
         self._class_factory = class_factory
         self._debug_mode = debug_mode
 
+    @property
+    def translator(self):
+        """Translator contains all database specific primitives to construct SQL code"""
+        return self._translator
+
     @staticmethod
     def postgres(conninfo: str, **kwargs) -> DBFactory | None:
         """Proxy constructor Postgres specific connection
@@ -99,12 +104,13 @@ class DBFactory:
                     self.conn = psycopg.connect(conninfo, **kwargs)
                 return self.conn
             @contextmanager
-            def cursor(self, _curr: DBCursorLike=None) -> ContextManager[DBCursorLike]:
+            def cursor(self, read_only: bool=False, _curr: DBCursorLike=None) -> ContextManager[DBCursorLike]:
                 if _curr is not None:
                     yield _curr
                 else:
                     with self.connection().cursor(binary=True) as curr:
                         yield curr
+                    if not read_only:
                         self.conn.commit()
 
         return DBFactory(PsycopgConnection(), TranslatorPSQL, namedtuple_row, dict_row, kwargs_row, debug_mode)
@@ -140,7 +146,7 @@ class DBFactory:
             def connection(self) -> ContextManager[DBConnectionLike]:
                 return pool.connection()
             @contextmanager
-            def cursor(self, _curr: DBCursorLike=None) -> Generator[DBCursorLike]:
+            def cursor(self, read_only:bool=False, _curr: DBCursorLike=None) -> Generator[DBCursorLike]:
                 if _curr is not None:
                     yield _curr
                     return
@@ -176,7 +182,7 @@ class DBFactory:
             @contextmanager
             def _cursor(self, _curr: DBCursorLike):
                 yield _curr
-            def cursor(self, _curr: DBCursorLike=None) -> ContextManager[DBCursorLike]:
+            def cursor(self, read_only:bool=False, _curr: DBCursorLike=None) -> ContextManager[DBCursorLike]:
                 if _curr is not None:
                     return self._cursor(_curr)
                 return connection.cursor()
@@ -311,8 +317,8 @@ class DBFactory:
                 yield conn
 
     @contextmanager
-    def cursor(self, _curr: DBCursorLike=None) -> Generator[DBCursorLike]:
-        with self._connection_pool.cursor(_curr) as cursor:
+    def cursor(self, read_only: bool=False, _curr: DBCursorLike=None) -> Generator[DBCursorLike]:
+        with self._connection_pool.cursor(read_only, _curr) as cursor:
             yield cursor
 
     def clear(self, schema: str = None):
@@ -625,7 +631,7 @@ class DBFactory:
         Yields:
             instance of DBTable/SimpleNamespace or dict
         """
-        with self.cursor() as curr:
+        with self.cursor(read_only=True) as curr:
             if not isinstance(query, str):
                 if not query.is_frozen:
                     sql = self._translator.select(query)

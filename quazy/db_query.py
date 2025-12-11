@@ -65,7 +65,7 @@ class DBQueryField(typing.Generic[T]):
                 field_path = f'"{self._alias}"."{field.column}"'
             else:
                 field_path = f'"{self._alias}"."{DB.body.column}"'
-                field_path = self._query.db._translator.json_deserialize(field, f"{field_path}->>'{item}'")
+                field_path = self._query.db.translator.json_deserialize(field, f"{field_path}->>'{item}'")
 
             if field.ref:
                 join_alias = f'{self._table.DB.table}__{field.name}s'
@@ -231,9 +231,9 @@ class DBSQL:
     def func3(self, op: str, second: Any, third: Any) -> DBSQL:
         return self.sql(f'{op}({self.sql_text}, {self.arg(second)!r}, {self.arg(third)!r})')
 
-    def cast(self, type_name: str) -> DBSQL:
-        return self.sql(f'{self.sql_text}::{type_name}')
-    
+    def cast(self, typ: type) -> DBSQL:
+        return self.sql(self.query.db.translator.type_cast(self.sql_text, typ))
+
     def prefix(self, sql_text: str) -> DBSQL:
         return self.sql(f'{sql_text} {self.sql_text}')
 
@@ -351,7 +351,7 @@ class DBSQL:
 
     @property
     def as_string(self) -> DBSQL:
-        return self.cast('text')
+        return self.cast(str)
 
     def __str__(self):
         return self.sql_text
@@ -359,15 +359,15 @@ class DBSQL:
     #def __int__(self) -> DBSQL:
     @property
     def as_integer(self) -> DBSQL:
-        return self.cast('integer')
+        return self.cast(int)
 
     #def __float__(self) -> DBSQL:
     @property
     def as_float(self) -> DBSQL:
-        return self.cast('double precision')
+        return self.cast(float)
 
     #def __bool__(self) -> DBSQL:
-    #    return self.cast('bool')
+    #    return self.cast(bool)
 
     def __round__(self, n=None) -> DBSQL:
         return self.func2('round', n)
@@ -610,11 +610,11 @@ class DBQuery(typing.Generic[T]):
         if value in self.args.values():
             key = next(k for k, v in self.args.items() if v == value)
             #key = list(self.args.keys())[list(self.args.values()).index(value)]
-            return DBSQL(self, self.db._translator.place_arg(key), aggregated)
+            return DBSQL(self, self.db.translator.place_arg(key), aggregated)
         self._arg_counter += 1
         key = f'_arg_{self._arg_counter}'
         self.args[key] = value
-        return DBSQL(self, self.db._translator.place_arg(key), aggregated)
+        return DBSQL(self, self.db.translator.place_arg(key), aggregated)
 
     def var(self, key: str, value: Optional[Any] = None) -> DBSQL:
         """Define variable to pass to query.
@@ -635,7 +635,7 @@ class DBQuery(typing.Generic[T]):
                     print(q.fetch_one())
         """
         self.args[key] = value
-        return DBSQL(self, self.db._translator.place_arg(key))
+        return DBSQL(self, self.db.translator.place_arg(key))
 
     def sql(self, sql_text: str, *args: Any) -> DBSQL:
         """Add raw SQL to query.
@@ -1197,7 +1197,7 @@ class DBQuery(typing.Generic[T]):
         """Build SQL and freeze the query object to prevent further changes"""
         self._check_frozen()
         self._check_fields()
-        self.frozen_sql = self.db._translator.select(self)
+        self.frozen_sql = self.db.translator.select(self)
         if self.db._debug_mode:
             print(self.frozen_sql)
         return self

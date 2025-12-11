@@ -1,17 +1,18 @@
 import os
-
+import typing
 from quazy import DBFactory
 from quazy.migrations import *
 from quazy.exceptions import QuazyError
 from quazy.migrations import dump_changes
 
 if __name__ == '__main__':
-    db = DBFactory.postgres(conninfo="postgresql://quazy:quazy@127.0.0.1/quazy")
+    db = DBFactory.postgres_pool(conninfo="postgresql://quazy:quazy@127.0.0.1/quazy")
+    #db = DBFactory.sqlite("file:quazy.db?mode=rwc")
 
     db.bind_module("tests.migration_1")
     #db._debug_mode = True
     db.clear()
-    db.create()
+    #db.create()
 
     activate_migrations(db)
     diff = compare_schema(db)
@@ -68,4 +69,4 @@ if __name__ == '__main__':
         os.mkdir("migrations")
     except FileExistsError:
         pass
-    dump_changes(db, "public", "migrations")
+    #dump_changes(db, "public", "migrations")

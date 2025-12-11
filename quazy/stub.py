@@ -19,6 +19,9 @@ def gen_stub(db: DBFactory, schema: str = None) -> str:
             return '"'+t.__qualname__+'"'
         return db_type_name(t)
 
+    def return_type(t) -> str:
+        return type_name(t) if not inspect.isclass(t) else '"'+t.__qualname__+'"'
+
     def extract_imports(module: str):
         nonlocal imports
 
@@ -96,7 +99,7 @@ def gen_stub(db: DBFactory, schema: str = None) -> str:
         for name in dir(table):
             value = getattr(table, name)
             if isinstance(value, property) and name != 'pk':
-                field_chunks.append(f'\t@property\n\tdef {name}(self) -> {value.fget.__annotations__["return"]}: ...')
+                field_chunks.append(f'\t@property\n\tdef {name}(self) -> {return_type(value.fget.__annotations__["return"])}: ...')
 
         for name, field in table.DB.many_fields.items():
             field_chunks.append(f'\t{name}: DBTable.ListGetter["{field.foreign_table.__qualname__}"]')

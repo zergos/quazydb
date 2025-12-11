@@ -69,10 +69,6 @@ class TranslatorSQLite(TranslatorPSQL):
     arg_unnamed = '?'
 
     @classmethod
-    def table_name(cls, table: type[DBTable]) -> str:
-        return f'"{table.DB.table}"'
-
-    @classmethod
     def json_serialize(cls, field: DBField, value: str) -> str:
         if field.type is str:
             if type(value) is ArgStr:
@@ -105,6 +101,12 @@ class TranslatorSQLite(TranslatorPSQL):
             if (type_name:=cls.TYPES_MAP[field.type]) in SQLITE_CONVERTERS:
                 return SQLITE_CONVERTERS[type_name](value)
         return value
+
+    @classmethod
+    def type_cast(cls, expr: str, typ: type) -> str:
+        if typ in cls.TYPES_MAP:
+            return f'CAST({expr} AS {cls.TYPES_MAP[typ]})'
+        raise QuazyTranslatorException(f'Unsupported type ({typ})')
 
     @classmethod
     def pk_type_name(cls, ctype: type) -> str:
