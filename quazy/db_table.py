@@ -20,7 +20,7 @@ except ImportError:
 
 from .db_field import DBField, UX, DBManyField, DBManyToManyField
 from .db_types import *
-from .db_types import T
+from .db_types import DBTableT
 from .exceptions import *
 
 if typing.TYPE_CHECKING:
@@ -484,8 +484,8 @@ class DBTable(metaclass=MetaTable):
         validators: typing.ClassVar[dict[str, TypeAdapter[Any]]]
         metadata: typing.ClassVar[dict[str, typing.Any]]
 
-    class ItemGetter(typing.Generic[T]):
-        def __init__(self, db: DBFactory, table: type[T], field_name: str, pk_value: Any, view: str = None):
+    class ItemGetter(typing.Generic[DBTableT]):
+        def __init__(self, db: DBFactory, table: type[DBTableT], field_name: str, pk_value: Any, view: str = None):
             self._db = db
             self._table = table
             self._attr_name = field_name
@@ -510,13 +510,13 @@ class DBTable(metaclass=MetaTable):
             self._cache[item] = value
             return value
 
-        def fetch(self, *fields) -> T:
+        def fetch(self, *fields) -> DBTableT:
             actual_fields = fields + ('pk',) if fields else ()
             value = self._db.query(self._table).select(*actual_fields).filter(pk=self._pk_value).fetch_one()
             self._cache |= value.__dict__
             return value
 
-    class ListGetter(list, typing.Generic[T]):
+    class ListGetter(list, typing.Generic[DBTableT]):
         def __init__(self, db: DBFactory, table: type[DBTable], field_name: str, pk_value: Any):
             self._db = db
             self._table = table
@@ -524,7 +524,7 @@ class DBTable(metaclass=MetaTable):
             self._pk_value = pk_value
             super().__init__()
 
-        def fetch(self, *fields) -> list[T]:
+        def fetch(self, *fields) -> list[DBTableT]:
             actual_fields = fields + ('pk',) if fields else ()
             self[:] = self._db.query(self._table).select(*actual_fields).filter(lambda x: getattr(x, self._field_name) == self._pk_value).fetch_all()
             return self

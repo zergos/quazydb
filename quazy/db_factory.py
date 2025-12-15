@@ -14,7 +14,7 @@ from .exceptions import *
 from .db_table import *
 from .db_field import *
 from .db_types import *
-from .db_types import T, Unassigned
+from .db_types import DBTableT, Unassigned
 from .translator import Translator
 
 import typing
@@ -112,6 +112,8 @@ class DBFactory:
                         yield curr
                     if not read_only:
                         self.conn.commit()
+            def close(self):
+                self.conn.close()
 
         return DBFactory(PsycopgConnection(), TranslatorPSQL, namedtuple_row, dict_row, kwargs_row, debug_mode)
 
@@ -153,6 +155,8 @@ class DBFactory:
                 with self.connection() as conn:
                     with conn.cursor(binary=True) as curr:
                         yield curr
+            def close(self):
+                pool.close()
 
         return DBFactory(PsycopgPoolConnection(), TranslatorPSQL, namedtuple_row, dict_row, kwargs_row, debug_mode)
 
@@ -186,9 +190,14 @@ class DBFactory:
                 if _curr is not None:
                     return self._cursor(_curr)
                 return connection.cursor()
+            def close(self):
+                connection.close()
 
         return DBFactory(SQLiteConnection(), TranslatorSQLite, namedtuple_row, dict_row, kwargs_row, debug_mode)
 
+    def close(self):
+        """Close the database connection and release all resources"""
+        self._connection_pool.close()
 
     def bind(self, cls: type[DBTable], schema: str = 'public'):
         """Bind a specific table to the factory instance
@@ -267,7 +276,7 @@ class DBFactory:
                 return table
         raise KeyError(item)
 
-    def query(self, table_class: Optional[type[T]] = None, name: Optional[str] = None) -> DBQuery[T]:
+    def query(self, table_class: Optional[type[DBTableT]] = None, name: Optional[str] = None) -> DBQuery[DBTableT]:
         """Create DBQuery instance
 
         Create a DBQuery instance bound to a specified DBTable or to the whole schema
@@ -284,9 +293,9 @@ class DBFactory:
             q = db.query().select(name=lambda s: s.street.name)
         """
         from .db_query import DBQuery
-        return DBQuery[T](self, table_class, name)
+        return DBQuery[DBTableT](self, table_class, name)
 
-    def get(self, table_class: type[T], pk: Any = None, **fields) -> T:
+    def get(self, table_class: type[DBTableT], pk: Any = None, **fields) -> DBTableT:
         """Request one row from a database table
 
         Hint:
@@ -480,7 +489,7 @@ class DBFactory:
                     if field.indexed:
                         curr.execute(self._translator.create_index(table, field))
 
-    def insert(self, item: T, _curr: DBCursorLike=None) -> T:
+    def insert(self, item: DBTableT, _curr: DBCursorLike=None) -> DBTableT:
         """Insert item into the database
 
         Args:
@@ -513,7 +522,7 @@ class DBFactory:
                 object.__setattr__(item, name, value)
             fields.append((field, value))
 
-        with self.cursor(_curr) as curr:
+        with self.cursor(_curr=_curr) as curr:
             sql, values = self._translator.insert(item, fields)
             if self._debug_mode: print(sql)
             item.pk = curr.execute(sql, values).fetchone()[0]
@@ -548,7 +557,7 @@ class DBFactory:
         item._after_insert(self)
         return item
 
-    def update(self, item: T, _curr: DBCursorLike=None) -> T:
+    def update(self, item: DBTableT, _curr: DBCursorLike=None) -> DBTableT:
         """Update item changes to a database
 
         Args:
@@ -565,7 +574,7 @@ class DBFactory:
         for name in item._modified_fields_:
             field = item.DB.fields[name]
             fields.append((field, getattr(item, name, DefaultValue)))
-        with self.cursor(_curr) as curr:
+        with self.cursor(_curr=_curr) as curr:
             if fields:
                 sql, values = self._translator.update(item.__class__, fields)
                 values['pk'] = getattr(item, item.DB.pk.name)
@@ -650,7 +659,7 @@ class DBFactory:
                 curr.row_factory = self._dict_factory if as_dict else self._named_factory
                 yield curr.execute(query)
 
-    def update_many(self, query: DBQuery[T], **values):
+    def update_many(self, query: DBQuery[DBTableT], **values):
         """Update items in the database by a query
 
         Arguments:
@@ -667,7 +676,7 @@ class DBFactory:
             if self._debug_mode: print(sql)
             curr.execute(sql, query.args | values)
 
-    def describe(self, query: Union[DBQuery[T], str]) -> list[DBField]:
+    def describe(self, query: Union[DBQuery[DBTableT], str]) -> list[DBField]:
         """Describe query result fields information
 
         It performs a prepared query to a database requesting zero rows just to collect information about fields.
@@ -709,7 +718,7 @@ class DBFactory:
                 return extract_description(curr.description)
 
 
-    def save(self, _item: T, _lookup_field: str | None = None, _curr: DBCursorLike=None, **kwargs) -> T:
+    def save(self, _item: DBTableT, _lookup_field: str | None = None, _curr: DBCursorLike=None, **kwargs) -> DBTableT:
         """Save item to the database
 
         It checks whether an item needs to be inserted or updated. Specify `lookup_field` to avoid searching by a primary key.
@@ -744,11 +753,11 @@ class DBFactory:
         return _item
 
     def delete(self, table: type[DBTable] = None, *,
-               item: T = None,
+               item: DBTableT = None,
                id: Any = None,
-               items: typing.Iterator[T] = None,
-               query: DBQuery[T] = None,
-               filter: Callable[[T], DBSQL] = None,
+               items: typing.Iterator[DBTableT] = None,
+               query: DBQuery[DBTableT] = None,
+               filter: Callable[[DBTableT], DBSQL] = None,
                _curr: DBCursorLike = None):
         """Delete an item or items from the database
 
@@ -773,17 +782,17 @@ class DBFactory:
         if id is not None:
             if table is None:
                 raise QuazyWrongOperation("Both `id` and `table` should be specified")
-            with self.cursor(_curr) as curr:
+            with self.cursor(_curr=_curr) as curr:
                 sql = self._translator.delete_related(table, table.DB.pk.column)
                 curr.execute(sql, (id, ))
         elif item is not None:
             item._before_delete(self)
-            with self.cursor(_curr) as curr:
+            with self.cursor(_curr=_curr) as curr:
                 sql = self._translator.delete_related(type(item), item.DB.pk.column)
                 curr.execute(sql, (item.pk, ))
             item._after_delete(self)
         elif items is not None:
-            with self.cursor(_curr) as curr:
+            with self.cursor(_curr=_curr) as curr:
                 for item in items:
                     self.delete(item=item, _curr=curr)
         elif query is not None:
@@ -791,7 +800,7 @@ class DBFactory:
                 raise QuazyWrongOperation('Query should be objects related')
             builder = self.query(query.table_class)
             sub = builder.with_query(query.select("pk"), not_materialized=True)
-            with self.cursor(_curr) as curr:
+            with self.cursor(_curr=_curr) as curr:
                 sql = self._translator.delete_selected(builder, sub)
                 if self._debug_mode: print(sql)
                 curr.execute(sql, builder.args)
@@ -801,7 +810,7 @@ class DBFactory:
             query = self.query(table).filter(filter)
             self.delete(query=query, _curr=_curr)
         elif table is not None:
-            with self.cursor(_curr) as curr:
+            with self.cursor(_curr=_curr) as curr:
                 sql = self._translator.delete(table)
                 curr.execute(sql)
         else:

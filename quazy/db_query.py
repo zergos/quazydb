@@ -13,7 +13,7 @@ import copy
 from .db_factory import DBFactory
 from .db_table import DBTable
 from .db_field import DBField
-from .db_types import T, KNOWN_TYPES
+from .db_types import DBTableT, KNOWN_TYPES
 from .exceptions import *
 
 if typing.TYPE_CHECKING:
@@ -34,10 +34,10 @@ def is_expression_canonical(expr: str) -> bool:
 
 is_expression_canonical.r = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]+([.][a-zA-Z_][a-zA-Z0-9_]+)+$")
 
-class DBQueryField(typing.Generic[T]):
-    def __init__(self, query: DBQuery, table: type[T], alias: str = None, join: DBJoin = None, repr: str = None):
-        self._query: DBQuery[T] = query
-        self._table: type[T] = table
+class DBQueryField(typing.Generic[DBTableT]):
+    def __init__(self, query: DBQuery, table: type[DBTableT], alias: str = None, join: DBJoin = None, repr: str = None):
+        self._query: DBQuery[DBTableT] = query
+        self._table: type[DBTableT] = table
         self._alias: str = alias or table.DB.table
         self._join: DBJoin = join
         self._repr: str = repr
@@ -46,7 +46,7 @@ class DBQueryField(typing.Generic[T]):
         DB = self._table.DB
         return False if DB is None else item in DB.fields or item in DB.many_fields or item in DB.many_to_many_fields
 
-    def __call__(self, sub_name: str) -> DBQueryField[T]:
+    def __call__(self, sub_name: str) -> DBQueryField[DBTableT]:
         if not sub_name.strip():
             raise QuazyWrongOperation('`sub_name` cannot be empty string')
         return DBQueryField(self._query, self._table, self._alias + '_' + sub_name, self._join)
@@ -477,7 +477,7 @@ if typing.TYPE_CHECKING:
     FDBSQL = DBSQL | Callable[[SimpleNamespace], DBSQL] | str | int | DBConditionField
 
 
-class DBQuery(typing.Generic[T]):
+class DBQuery(typing.Generic[DBTableT]):
     """Query base class
 
     Create it with DBFactory.query() or DBTable.query().
@@ -490,7 +490,7 @@ class DBQuery(typing.Generic[T]):
         :meta private:
         """
 
-    def __init__(self, db: DBFactory, table_class: Optional[type[T]] = None, name: str = ''):
+    def __init__(self, db: DBFactory, table_class: Optional[type[DBTableT]] = None, name: str = ''):
         """Constructor
 
         Arguments:
@@ -500,7 +500,7 @@ class DBQuery(typing.Generic[T]):
         """
         self.name = name or f'q{id(self)}'
         self.db: DBFactory = db
-        self.table_class: type[T] | None = table_class
+        self.table_class: type[DBTableT] | None = table_class
         self.fields: OrderedDict[str, DBSQL] = OrderedDict()
         self.fetch_objects: bool = table_class is not None
         self.joins: OrderedDict[str, DBJoin] = OrderedDict()
@@ -520,7 +520,7 @@ class DBQuery(typing.Generic[T]):
         self._collect_scheme()
 
     def _collect_scheme(self, for_copy: bool = False):
-        self.scheme: Union[SimpleNamespace, DBQueryField[T]] = DBScheme()
+        self.scheme: Union[SimpleNamespace, DBQueryField[DBTableT]] = DBScheme()
         for table in self.db._tables:
             setattr(self.scheme, table.DB.snake_name, DBQueryField(self, table))
 
@@ -577,7 +577,7 @@ class DBQuery(typing.Generic[T]):
             DBQuery.queries[self._hash] = self
 
     @contextmanager
-    def get_scheme(self) -> SimpleNamespace | DBQueryField[T]:
+    def get_scheme(self) -> SimpleNamespace | DBQueryField[DBTableT]:
         """Scheme object for query context
 
         Scheme contains
@@ -731,7 +731,7 @@ class DBQuery(typing.Generic[T]):
                 self.args[k] = v
         return DBSubqueryField(self, subquery)
 
-    def select(self, *field_names: str, **fields: FDBSQL) -> DBQuery[T]:
+    def select(self, *field_names: str, **fields: FDBSQL) -> DBQuery[DBTableT]:
         """Specify a list of selected fields
 
         Don't call this method if you want to fetch a list of `DBTable` instances (with all fields).
@@ -759,7 +759,7 @@ class DBQuery(typing.Generic[T]):
             self.fields[field_name] = self.resolve(field_value)
         return self
 
-    def select_all(self) -> DBQuery[T]:
+    def select_all(self) -> DBQuery[DBTableT]:
         """Select all possible fields for this query.
 
         This is similar to a `SELECT * FROM ...` query.
@@ -776,7 +776,7 @@ class DBQuery(typing.Generic[T]):
         self.fields['*'] = DBSQL(self, '*')
         return self
 
-    def select_objects(self) -> DBQuery[T]:
+    def select_objects(self) -> DBQuery[DBTableT]:
         """Select all fields specified for this query.
 
         Returns:
@@ -786,7 +786,7 @@ class DBQuery(typing.Generic[T]):
         self._check_fields()
         return self
 
-    def distinct(self) -> DBQuery[T]:
+    def distinct(self) -> DBQuery[DBTableT]:
         """Select only different rows for this query.
 
         Add a `DISTINCT` clause to a `SELECT ...` statement.
@@ -795,7 +795,7 @@ class DBQuery(typing.Generic[T]):
         self.is_distinct = True
         return self
 
-    def sort_by(self, *fields: FDBSQL, desc: bool = False) -> DBQuery[T]:
+    def sort_by(self, *fields: FDBSQL, desc: bool = False) -> DBQuery[DBTableT]:
         """Add sorting to a query
 
         Arguments:
@@ -810,7 +810,7 @@ class DBQuery(typing.Generic[T]):
             self.sort_list.append(self.resolve(field) if not desc else self.resolve(field).postfix('DESC'))
         return self
 
-    def filter(self, _expression: FDBSQL | DBTable = None, **kwargs) -> DBQuery[T]:
+    def filter(self, _expression: FDBSQL | DBTable = None, **kwargs) -> DBQuery[DBTableT]:
         """Add filter to a query
 
         Filter can be applied by a common lambda expression or by specific field/value pairs.
@@ -846,7 +846,7 @@ class DBQuery(typing.Generic[T]):
 
     where = filter
 
-    def exclude(self, _expression: FDBSQL = None, **kwargs) -> DBQuery[T]:
+    def exclude(self, _expression: FDBSQL = None, **kwargs) -> DBQuery[DBTableT]:
         """Filter elements to exclude from a query
 
         Works like a negative filter (excluding elements from a selection)
@@ -877,7 +877,7 @@ class DBQuery(typing.Generic[T]):
             self.filters.append(getattr(self.scheme, k) != v)  # noqa
         return self
 
-    def group_filter(self, expression: FDBSQL) -> DBQuery[T]:
+    def group_filter(self, expression: FDBSQL) -> DBQuery[DBTableT]:
         """Filter applied to group fields. See below
 
         Hint:
@@ -894,7 +894,7 @@ class DBQuery(typing.Generic[T]):
         self.group_filters.append(self.resolve(expression))
         return self
 
-    def group_by(self, *fields: FDBSQL) -> DBQuery[T]:
+    def group_by(self, *fields: FDBSQL) -> DBQuery[DBTableT]:
         """Specify group fields for aggregated results
 
         This is a query analogue to `GROUP BY ...` statement.
@@ -910,7 +910,7 @@ class DBQuery(typing.Generic[T]):
             self.groups.append(self.resolve(field))
         return self
 
-    def set_window(self, offset: int | None = None, limit: int | None = None) -> DBQuery[T]:
+    def set_window(self, offset: int | None = None, limit: int | None = None) -> DBQuery[DBTableT]:
         """Set the query result window using SQL offset/limit features
 
         This is analogue to `SELECT a, b, c FROM table OFFSET ... LIMIT ...` statement.
@@ -1022,7 +1022,7 @@ class DBQuery(typing.Generic[T]):
         self._check_fields()
         return self.db.describe(self)
 
-    def __iter__(self) -> Generator[T]:
+    def __iter__(self) -> Generator[DBTableT]:
         """Execute a query and iterate all over result rows
 
         :meta public:
@@ -1030,12 +1030,12 @@ class DBQuery(typing.Generic[T]):
         with self.execute() as curr:
             yield from curr
 
-    def fetch_one(self, as_dict: bool = False) -> T | Any:
+    def fetch_one(self, as_dict: bool = False) -> DBTableT | Any:
         """Execute query and fetch first result row"""
         with self.execute(as_dict) as curr:
             return curr.fetchone()
 
-    def get(self, pk_id: Any) -> T | None:
+    def get(self, pk_id: Any) -> DBTableT | None:
         """Request and get one row by the primary key identifier"""
         if not self.fetch_objects:
             raise QuazyWrongOperation("`get` possible for objects query")
@@ -1064,7 +1064,7 @@ class DBQuery(typing.Generic[T]):
             result = result | expr
         return result
 
-    def __getitem__(self, item: Any) -> list[T | Any] | DBSQL:
+    def __getitem__(self, item: Any) -> list[DBTableT | Any] | DBSQL:
         """Get an expression for the selected field or select partially by slice"""
         if isinstance(item, slice):
             if item.step is not None:
@@ -1081,7 +1081,7 @@ class DBQuery(typing.Generic[T]):
             return q.fetch_all()
         return self.fields[item]
 
-    def fetch_all(self, as_dict: bool = False) -> list[T | Any]:
+    def fetch_all(self, as_dict: bool = False) -> list[DBTableT | Any]:
         """Execute a query and fetch all result rows as a list"""
         with self.execute(as_dict) as curr:
             return curr.fetchall()
@@ -1158,11 +1158,11 @@ class DBQuery(typing.Generic[T]):
         """Execute subquery to fetch aggregate function `avg` result value"""
         return self.fetch_aggregate('avg', expr)
 
-    def update(self, **values) -> DBQuery[T]:
+    def update(self, **values) -> DBQuery[DBTableT]:
         """Updates the current query object with the specified values"""
         return self.db.update_many(self, **values)
 
-    def chained(self, id_name: str, next_name: str, start_value: Any) -> DBQuery[T]:
+    def chained(self, id_name: str, next_name: str, start_value: Any) -> DBQuery[DBTableT]:
         """Select chained rows via recursive request
 
         Arguments:
@@ -1193,7 +1193,7 @@ class DBQuery(typing.Generic[T]):
         self.chained_opts = DBChainedFilter(id_name, next_name, self.arg(start_value))
         return self
 
-    def freeze(self) -> DBQuery[T]:
+    def freeze(self) -> DBQuery[DBTableT]:
         """Build SQL and freeze the query object to prevent further changes"""
         self._check_frozen()
         self._check_fields()
