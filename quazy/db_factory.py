@@ -2,13 +2,13 @@
 
 This module represents one class `DBFactory` as a start point to any connection with the database.
 """
-
 from __future__ import annotations
 
+import asyncio
 import sys
 import inspect
 from collections import defaultdict
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 
 from .exceptions import *
 from .db_table import *
@@ -16,16 +16,17 @@ from .db_field import *
 from .db_types import *
 from .db_types import DBTableT, Unassigned
 from .translator import Translator
+from .helpers import make_async, hybrid_contextmanager
 
 import typing
 
 if typing.TYPE_CHECKING:
     from typing import *
     from types import SimpleNamespace
-    from .db_query import DBQuery, DBSQL
+    from .db_query import DBQuery, DBQueryAsync, DBSQL
     from .db_protocol import *
 
-__all__ = ['DBFactory']
+__all__ = ['DBFactory', 'DBFactoryAsync']
 
 class DBFactory:
     """Basic database factory class
@@ -46,7 +47,9 @@ class DBFactory:
             ...
 
     """
-    def __init__(self, connection_pool: DBPoolLike, translator: Translator, named_factory: DBRowFactoryLike, dict_factory: DBRowFactoryLike, class_factory: DBRowFactoryLike, debug_mode: bool = False):
+    async_mode: ClassVar[bool] = False
+
+    def __init__(self, connection_pool: DBPoolLike, translator: Translator, named_factory: DBRowFactoryLike, dict_factory: DBRowFactoryLike, class_factory: DBRowFactoryLike):
         """Basic constructor for database connection
 
         Create a connection via a specific connection pool.
@@ -68,7 +71,7 @@ class DBFactory:
         self._named_factory = named_factory
         self._dict_factory = dict_factory
         self._class_factory = class_factory
-        self._debug_mode = debug_mode
+        self._debug_mode = False
 
     @property
     def translator(self):
@@ -93,7 +96,6 @@ class DBFactory:
         from psycopg.rows import namedtuple_row, dict_row, kwargs_row
         from .translator_psql import TranslatorPSQL
 
-        debug_mode = kwargs.pop("debug_mode", False)
         connection = psycopg.connect(conninfo, **kwargs)
         connection.close()
 
@@ -104,7 +106,7 @@ class DBFactory:
                     self.conn = psycopg.connect(conninfo, **kwargs)
                 return self.conn
             @contextmanager
-            def cursor(self, read_only: bool=False, _curr: DBCursorLike=None) -> ContextManager[DBCursorLike]:
+            def cursor(self, read_only: bool=False, _curr: DBCursorLike=None) -> Generator[DBCursorLike]:
                 if _curr is not None:
                     yield _curr
                 else:
@@ -115,7 +117,7 @@ class DBFactory:
             def close(self):
                 self.conn.close()
 
-        return DBFactory(PsycopgConnection(), TranslatorPSQL, namedtuple_row, dict_row, kwargs_row, debug_mode)
+        return DBFactory(PsycopgConnection(), TranslatorPSQL, namedtuple_row, dict_row, kwargs_row)
 
     @staticmethod
     def postgres_pool(conninfo: str, **kwargs) -> DBFactory | None:
@@ -136,7 +138,6 @@ class DBFactory:
 
         from .translator_psql import TranslatorPSQL
 
-        debug_mode = kwargs.pop("debug_mode", False)
         try:
             pool = ConnectionPool(conninfo, kwargs=kwargs)
             pool.wait()
@@ -158,7 +159,7 @@ class DBFactory:
             def close(self):
                 pool.close()
 
-        return DBFactory(PsycopgPoolConnection(), TranslatorPSQL, namedtuple_row, dict_row, kwargs_row, debug_mode)
+        return DBFactory(PsycopgPoolConnection(), TranslatorPSQL, namedtuple_row, dict_row, kwargs_row)
 
     @staticmethod
     def sqlite(conn_uri: str, **kwargs) -> DBFactory | None:
@@ -173,9 +174,8 @@ class DBFactory:
         """
         import sqlite3
         from .translator_sqlite import (TranslatorSQLite, namedtuple_row, dict_row, kwargs_row,
-                                        ConnectionFactory, CursorFactory)
+                                        ConnectionFactory)
 
-        debug_mode = kwargs.pop("debug_mode", False)
         detect_types = kwargs.pop("detect_types", sqlite3.PARSE_DECLTYPES)
         connection = sqlite3.connect(conn_uri, uri=True, detect_types=detect_types, factory=ConnectionFactory, **kwargs)
 
@@ -193,9 +193,9 @@ class DBFactory:
             def close(self):
                 connection.close()
 
-        return DBFactory(SQLiteConnection(), TranslatorSQLite, namedtuple_row, dict_row, kwargs_row, debug_mode)
+        return DBFactory(SQLiteConnection(), TranslatorSQLite, namedtuple_row, dict_row, kwargs_row)
 
-    def close(self):
+    def close(self) -> Awaitable[None] | None:
         """Close the database connection and release all resources"""
         self._connection_pool.close()
 
@@ -295,7 +295,7 @@ class DBFactory:
         from .db_query import DBQuery
         return DBQuery[DBTableT](self, table_class, name)
 
-    def get(self, table_class: type[DBTableT], pk: Any = None, **fields) -> DBTableT:
+    def get(self, table_class: type[DBTableT], pk: Any = None, **fields) -> Awaitable[DBTableT] | DBTableT:
         """Request one row from a database table
 
         Hint:
@@ -316,21 +316,18 @@ class DBFactory:
             query.filter(lambda s: getattr(s, k) == v)
         return query.fetch_one()
 
-    @contextmanager
-    def connection(self, reuse_conn: DBConnectionLike = None) -> Generator[DBConnectionLike]:
+    @hybrid_contextmanager
+    def connection(self) -> AsyncGenerator[DBConnectionLike] | Generator[DBConnectionLike]:
         """Context manager for connection"""
-        if reuse_conn is not None:
-            yield reuse_conn
-        else:
-            with self._connection_pool.connection() as conn:
-                yield conn
+        with self._connection_pool.connection() as conn:
+            yield conn
 
-    @contextmanager
-    def cursor(self, read_only: bool=False, _curr: DBCursorLike=None) -> Generator[DBCursorLike]:
+    @hybrid_contextmanager
+    def cursor(self, read_only: bool=False, _curr: DBCursorLike=None) -> AsyncGenerator[DBCursorLike] | Generator[DBCursorLike]:
         with self._connection_pool.cursor(read_only, _curr) as cursor:
             yield cursor
 
-    def clear(self, schema: str = None):
+    def clear(self, schema: str = None) -> Awaitable[None] | None:
         """Drop all known tables in a database
 
         Args:
@@ -425,7 +422,7 @@ class DBFactory:
 
         return all_tables
 
-    def missed_tables(self, schema: str = None) -> list[type[DBTable]]:
+    def missed_tables(self, schema: str = None) -> Awaitable[list[type[DBTable]]] | list[type[DBTable]]:
         """Get all tables added as models but not created in the database yet
 
         :meta private:
@@ -449,14 +446,14 @@ class DBFactory:
         """
         return len(self.missed_tables(schema)) == 0
 
-    def table_exists(self, table: DBTable) -> bool:
+    def table_exists(self, table: DBTable) -> Awaitable[bool] | bool:
         """Check if a table exists in the database
 
         :meta private:"""
         with self.select(self._translator.is_table_exists(table)) as res:
             return res.fetch_one()[0]
 
-    def create(self, schema: str = None):
+    def create(self, schema: str = None) -> Awaitable[None] | None:
         """Create all added tables in the database"""
         all_tables = self.missed_tables(schema)
         if not all_tables:
@@ -489,7 +486,7 @@ class DBFactory:
                     if field.indexed:
                         curr.execute(self._translator.create_index(table, field))
 
-    def insert(self, item: DBTableT, _curr: DBCursorLike=None) -> DBTableT:
+    def insert(self, item: DBTableT, _curr: DBCursorLike=None) -> Awaitable[DBTableT] | DBTableT:
         """Insert item into the database
 
         Args:
@@ -523,9 +520,11 @@ class DBFactory:
             fields.append((field, value))
 
         with self.cursor(_curr=_curr) as curr:
-            sql, values = self._translator.insert(item, fields)
+            sql, values = getattr(self._translator, "insert")(item, fields)
             if self._debug_mode: print(sql)
-            item.pk = curr.execute(sql, values).fetchone()[0]
+            curr.execute(sql, values)
+            rows = curr.fetchone()
+            item.pk = rows[0]
             item._modified_fields_.clear()
 
             for field_name, table in item.DB.subtables.items():
@@ -557,7 +556,7 @@ class DBFactory:
         item._after_insert(self)
         return item
 
-    def update(self, item: DBTableT, _curr: DBCursorLike=None) -> DBTableT:
+    def update(self, item: DBTableT, _curr: DBCursorLike=None) -> Awaitable[DBTableT] | DBTableT:
         """Update item changes to a database
 
         Args:
@@ -601,7 +600,8 @@ class DBFactory:
                 # delete old items, add new items
                 new_indices = set(row.pk for row in getattr(item, field_name))
                 old_indices_sql = self._translator.select_many_indices(field.middle_table, item.DB.table, field.foreign_table.DB.table)
-                results = curr.execute(old_indices_sql, {"value": item.pk}).fetchone()
+                curr.execute(old_indices_sql, {"value": item.pk})
+                results = curr.fetchone()
                 old_indices = set(results[0]) if results[0] else set()
 
                 indices_to_delete = list(old_indices - new_indices)
@@ -623,8 +623,10 @@ class DBFactory:
         item._after_update(self)
         return item
 
-    @contextmanager
-    def select(self, query: Union[DBQuery, str], as_dict: bool = False) -> Iterator[Iterator[DBTable | SimpleNamespace | dict[str, Any]]]:
+    @hybrid_contextmanager
+    def select(self, query: Union[DBQuery, str], as_dict: bool = False) -> (
+            AsyncGenerator[Iterator[DBTable | SimpleNamespace | dict[str, Any]]] |
+            Generator[Iterator[DBTable | SimpleNamespace | dict[str, Any]]]):
         """Select items from the database
 
         It performs a prepared query to a database and yields results. Is not intended for direct calls.
@@ -659,7 +661,7 @@ class DBFactory:
                 curr.row_factory = self._dict_factory if as_dict else self._named_factory
                 yield curr.execute(query)
 
-    def update_many(self, query: DBQuery[DBTableT], **values):
+    def update_many(self, query: DBQuery[DBTableT], **values) -> Awaitable[None] | None:
         """Update items in the database by a query
 
         Arguments:
@@ -705,7 +707,6 @@ class DBFactory:
                     res.append(field)
             return res
 
-        res = []
         with self.cursor() as curr:
             if isinstance(query, DBQuery):
                 query = query.copy().set_window(limit=0)
@@ -718,7 +719,7 @@ class DBFactory:
                 return extract_description(curr.description)
 
 
-    def save(self, _item: DBTableT, _lookup_field: str | None = None, _curr: DBCursorLike=None, **kwargs) -> DBTableT:
+    def save(self, _item: DBTableT, _lookup_field: str | None = None, _curr: DBCursorLike=None, **kwargs) -> Awaitable[DBTableT] | DBTableT:
         """Save item to the database
 
         It checks whether an item needs to be inserted or updated. Specify `lookup_field` to avoid searching by a primary key.
@@ -758,7 +759,7 @@ class DBFactory:
                items: typing.Iterator[DBTableT] = None,
                query: DBQuery[DBTableT] = None,
                filter: Callable[[DBTableT], DBSQL] = None,
-               _curr: DBCursorLike = None):
+               _curr: DBCursorLike = None) -> Awaitable[None] | None:
         """Delete an item or items from the database
 
         It has many possible ways to delete expected items:
@@ -811,8 +812,133 @@ class DBFactory:
             self.delete(query=query, _curr=_curr)
         elif table is not None:
             with self.cursor(_curr=_curr) as curr:
-                sql = self._translator.delete(table)
+                sql = getattr(self._translator, "delete")(table)
                 curr.execute(sql)
         else:
             raise QuazyWrongOperation('Specify one of the arguments')
 
+
+ASYNC_COMMON_FUNCS = ('cursor', 'execute', 'executemany', 'fetchone', 'fetchall', 'copy', 'write_row')
+
+class DBFactoryAsync(DBFactory):
+    async_mode: ClassVar[bool] = True
+
+    @staticmethod
+    def postgres(conninfo: str, **kwargs) -> Self | None:
+        import psycopg
+        from psycopg.rows import namedtuple_row, dict_row, kwargs_row
+        from .translator_psql import TranslatorPSQL
+
+        debug_mode = kwargs.pop("debug_mode", False)
+        connection = psycopg.connect(conninfo, **kwargs)
+        connection.close()
+
+        class PsycopgConnection:
+            conn: psycopg.AsyncConnection = None
+            async def connection(self) -> ContextManager[DBConnectionLike] | DBConnectionLike:
+                if self.conn is None or self.conn.closed:
+                    self.conn = await psycopg.AsyncConnection.connect(conninfo, **kwargs)
+                return self.conn
+            @asynccontextmanager
+            async def cursor(self, read_only: bool=False, _curr: DBCursorLike=None) -> ContextManager[DBCursorLike]:
+                if _curr is not None:
+                    yield _curr
+                else:
+                    conn = await self.connection()
+                    async with conn.cursor(binary=True) as curr:
+                        yield curr
+                    if not read_only:
+                        await self.conn.commit()
+            async def close(self):
+                await self.conn.close()
+
+        return DBFactoryAsync(PsycopgConnection(), TranslatorPSQL, namedtuple_row, dict_row, kwargs_row, debug_mode)
+
+    @staticmethod
+    def postgres_pool(conninfo: str, **kwargs) -> DBFactory | None:
+        import psycopg
+        from psycopg_pool.pool_async import AsyncConnectionPool
+        from psycopg.rows import namedtuple_row, dict_row, kwargs_row
+
+        from .translator_psql import TranslatorPSQL
+
+        connection = psycopg.connect(conninfo, **kwargs)
+        connection.close()
+
+        class PsycopgPoolConnection:
+            pool: AsyncConnectionPool = None
+
+            @asynccontextmanager
+            async def connection(self) -> AsyncGenerator[DBConnectionLike]:
+                if self.pool is None:
+                    self.pool = AsyncConnectionPool(conninfo, kwargs=kwargs)
+                    await self.pool.open()
+                    await self.pool.wait()
+                async with self.pool.connection() as conn:
+                    yield conn
+            @asynccontextmanager
+            async def cursor(self, read_only:bool=False, _curr: DBCursorLike=None) -> AsyncGenerator[DBCursorLike]:
+                if _curr is not None:
+                    yield _curr
+                    return
+                async with self.connection() as conn:
+                    async with conn.cursor(binary=True) as curr:
+                        yield curr
+            async def close(self):
+                await self.pool.close()
+
+        return DBFactoryAsync(PsycopgPoolConnection(), TranslatorPSQL, namedtuple_row, dict_row, kwargs_row)
+
+    @staticmethod
+    def sqlite(conn_uri: str, **kwargs) -> DBFactory | None:
+        try:
+            import aiosqlite
+        except ImportError:
+            raise NotImplementedError('SQLite async is not implemented. Install `aiosqlite` module')
+
+        import sqlite3
+        from .translator_sqlite import (TranslatorSQLite, namedtuple_row, dict_row, kwargs_row,
+                                        ConnectionFactoryAsync)
+
+        detect_types = kwargs.pop("detect_types", sqlite3.PARSE_DECLTYPES)
+
+        class SQLiteConnection:
+            conn: aiosqlite.Connection = None
+            async def connection(self) -> DBConnectionLike:
+                if self.conn is None:
+                    connector = lambda: sqlite3.connect(conn_uri, uri=True, detect_types=detect_types, **kwargs)
+                    self.conn = await ConnectionFactoryAsync(connector, iter_chunk_size=64)
+                    await self.conn.execute("PRAGMA foreign_keys = ON")
+                return self.conn
+            @asynccontextmanager
+            async def cursor(self, read_only:bool=False, _curr: DBCursorLike=None) -> AsyncGenerator[DBCursorLike]:
+                if _curr is not None:
+                    yield _curr
+                    return
+                conn = await self.connection()
+                async with conn.cursor() as curr:
+                    yield curr
+            async def close(self):
+                await self.conn.close()
+
+        return DBFactoryAsync(SQLiteConnection(), TranslatorSQLite, namedtuple_row, dict_row, kwargs_row)
+
+
+    def query(self, table_class: Optional[type[DBTableT]] = None, name: Optional[str] = None) -> DBQueryAsync[DBTableT]:
+        from .db_query import DBQueryAsync
+        return DBQueryAsync[DBTableT](self, table_class, name)
+
+    connection = make_async(DBFactory.connection, ('connection',))
+    cursor = make_async(DBFactory.cursor, ('cursor',))
+    close = make_async(DBFactory.close, ('close',))
+    get = make_async(DBFactory.get, ('fetch_one',))
+    clear = make_async(DBFactory.clear, ASYNC_COMMON_FUNCS + ('results',))
+    missed_tables = make_async(DBFactory.missed_tables, ('select', 'fetchall'))
+    create = make_async(DBFactory.create, ASYNC_COMMON_FUNCS + ('missed_tables', ))
+    table_exists = make_async(DBFactory.table_exists, ASYNC_COMMON_FUNCS + ('select',))
+    insert = make_async(DBFactory.insert, ASYNC_COMMON_FUNCS + ('insert', 'save'))
+    update = make_async(DBFactory.update, ASYNC_COMMON_FUNCS + ('insert', 'save'))
+    update_many = make_async(DBFactory.update_many, ASYNC_COMMON_FUNCS)
+    select = make_async(DBFactory.select, ASYNC_COMMON_FUNCS)
+    save = make_async(DBFactory.save, ASYNC_COMMON_FUNCS + ('fetch_value', 'update', 'insert'))
+    delete = make_async(DBFactory.delete, ASYNC_COMMON_FUNCS + ('delete',))

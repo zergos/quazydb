@@ -10,17 +10,18 @@ from collections import OrderedDict
 from enum import Enum
 import copy
 
-from .db_factory import DBFactory
+from .db_factory import DBFactory, DBFactoryAsync
 from .db_table import DBTable
 from .db_field import DBField
 from .db_types import DBTableT, KNOWN_TYPES
+from .helpers import make_async, hybrid_contextmanager
 from .exceptions import *
 
 if typing.TYPE_CHECKING:
     from typing import *
 
 
-__all__ = ['DBQuery', 'DBScheme', 'DBQueryField']
+__all__ = ['DBQuery', 'DBQueryAsync', 'DBScheme', 'DBQueryField']
 
 def is_expression_id(expr: str) -> str:
     # check expression is field "name"
@@ -539,7 +540,7 @@ class DBQuery(typing.Generic[DBTableT]):
             raise QuazyFrozen
 
     def __copy__(self):
-        obj = object.__new__(DBQuery)
+        obj = object.__new__(self.__class__)
         deep_attrs = 'fields joins sort_list filters groups group_filters with_queries args'.split()
         for k, v in self.__dict__.items():
             if k == "name":
@@ -1000,8 +1001,8 @@ class DBQuery(typing.Generic[DBTableT]):
                     if not field.body:
                         self.fields[field_name] = getattr(self.scheme, field_name)
 
-    @contextmanager
-    def execute(self, as_dict: bool = False):
+    @hybrid_contextmanager
+    def execute(self, as_dict: bool = False) -> AsyncGenerator[DBTableT] | Generator[DBTableT]:
         """Execute query and yields database cursor to fetch one or more result rows.
 
         Arguments:
@@ -1014,7 +1015,7 @@ class DBQuery(typing.Generic[DBTableT]):
         with self.db.select(self, as_dict) as curr:
             yield curr
 
-    def describe(self) -> list[DBField]:
+    def describe(self) -> Awaitable[list[DBField]] | list[DBField]:
         """Request all result fields information.
 
         See `DBFactory.describe()`
@@ -1030,7 +1031,7 @@ class DBQuery(typing.Generic[DBTableT]):
         with self.execute() as curr:
             yield from curr
 
-    def fetch_one(self, as_dict: bool = False) -> DBTableT | Any:
+    def fetch_one(self, as_dict: bool = False) -> Awaitable[DBTableT | Any] | DBTableT | Any:
         """Execute query and fetch first result row"""
         with self.execute(as_dict) as curr:
             return curr.fetchone()
@@ -1081,19 +1082,19 @@ class DBQuery(typing.Generic[DBTableT]):
             return q.fetch_all()
         return self.fields[item]
 
-    def fetch_all(self, as_dict: bool = False) -> list[DBTableT | Any]:
+    def fetch_all(self, as_dict: bool = False) -> Awaitable[list[DBTableT | Any]] | list[DBTableT | Any]:
         """Execute a query and fetch all result rows as a list"""
         with self.execute(as_dict) as curr:
             return curr.fetchall()
 
-    def fetch_value(self) -> Any:
+    def fetch_value(self) -> Awaitable[Any] | Any:
         """Execute a query and fetch first column value of first result row"""
         with self.execute() as curr:
             if (one:=curr.fetchone()) is not None:
                 return one[0]
             return None
 
-    def fetch_list(self, index: int | str = 0) -> list[Any]:
+    def fetch_list(self, index: int | str = 0) -> Awaitable[list[DBTableT | Any]] | list[DBTableT | Any]:
         """Execute a query and fetch the first column of all result rows as a list of values
 
         Arguments:
@@ -1108,9 +1109,9 @@ class DBQuery(typing.Generic[DBTableT]):
 
     def exists(self) -> bool:
         """Execute a query and check whether the first result row exists"""
-        return self.fetchone() is not None
+        return self.fetch_one() is not None
 
-    def fetch_aggregate(self, function: str, expr: FDBSQL = None) -> typing.Any:
+    def fetch_aggregate(self, function: str, expr: FDBSQL = None) -> Awaitable[Any] | Any:
         """Execute subquery to fetch aggregate function result value
 
         This group of functions is intended to estimate query metrics and numbers before real execution.
@@ -1132,35 +1133,38 @@ class DBQuery(typing.Generic[DBTableT]):
         obj.fields.clear()
         obj.fetch_objects = False
         obj.select(result=obj.resolve(expr).aggregate(function))
-        return obj.fetch_one().result
+        row = obj.fetch_one()
+        return row.result
 
-    def fetch_count(self, expr: FDBSQL = None):
+    def fetch_count(self, expr: FDBSQL = None) -> Awaitable[int | None] | int | None:
         """Execute subquery to fetch aggregate function `count` result value"""
         obj = self.copy()
         obj.fields.clear()
         obj.fetch_objects = False
         obj.select(result=obj.count(expr))
-        return obj.fetch_one().result
+        row = obj.fetch_one()
+        return row.result
 
-    def fetch_sum(self, expr: FDBSQL) -> typing.Any:
+    def fetch_sum(self, expr: FDBSQL) -> Awaitable[Any] | Any:
         """Execute subquery to fetch aggregate function `sum` result value"""
         return self.fetch_aggregate('sum', expr)
 
-    def fetch_max(self, expr: FDBSQL) -> typing.Any:
+    def fetch_max(self, expr: FDBSQL) -> Awaitable[Any] | Any:
         """Execute subquery to fetch aggregate function `max` result value"""
         return self.fetch_aggregate('max', expr)
 
-    def fetch_min(self, expr: FDBSQL) -> typing.Any:
+    def fetch_min(self, expr: FDBSQL) -> Awaitable[Any] | Any:
         """Execute subquery to fetch aggregate function `min` result value"""
         return self.fetch_aggregate('min', expr)
 
-    def fetch_avg(self, expr: FDBSQL) -> typing.Any:
+    def fetch_avg(self, expr: FDBSQL) -> Awaitable[Any] | Any:
         """Execute subquery to fetch aggregate function `avg` result value"""
         return self.fetch_aggregate('avg', expr)
 
-    def update(self, **values) -> DBQuery[DBTableT]:
+    def update(self, **values) -> Awaitable[DBQuery[DBTableT]] | DBQuery[DBTableT]:
         """Updates the current query object with the specified values"""
-        return self.db.update_many(self, **values)
+        self.db.update_many(self, **values)
+        return self
 
     def chained(self, id_name: str, next_name: str, start_value: Any) -> DBQuery[DBTableT]:
         """Select chained rows via recursive request
@@ -1206,3 +1210,26 @@ class DBQuery(typing.Generic[DBTableT]):
     def is_frozen(self) -> bool:
         """Whether the query object is frozen"""
         return self.frozen_sql is not None
+
+
+class DBQueryAsync(DBQuery[DBTableT]):
+    db: DBFactoryAsync
+
+    async def __aiter__(self) -> AsyncGenerator[DBTableT]:
+        async with self.execute() as curr:
+            async for row in curr:
+                yield row
+
+    execute = make_async(DBQuery.execute, ('select', ))
+    describe = make_async(DBQuery.describe, ('describe', ))
+    fetch_one = make_async(DBQuery.fetch_one, ('execute', 'fetchone'))
+    fetch_all = make_async(DBQuery.fetch_all, ('execute', 'fetchall'))
+    fetch_list = make_async(DBQuery.fetch_list, ('execute', 'fetchall'))
+    fetch_value = make_async(DBQuery.fetch_value, ('execute', 'fetchone'))
+    fetch_aggregate = make_async(DBQuery.fetch_aggregate, ('fetch_one', ))
+    fetch_count = make_async(DBQuery.fetch_count, ('fetch_one', ))
+    fetch_sum = make_async(DBQuery.fetch_sum, ('fetch_aggregate',))
+    fetch_max = make_async(DBQuery.fetch_max, ('fetch_aggregate',))
+    fetch_min = make_async(DBQuery.fetch_min, ('fetch_aggregate',))
+    fetch_avg = make_async(DBQuery.fetch_avg, ('fetch_aggregate',))
+    update = make_async(DBQuery.update, ('update_many',))

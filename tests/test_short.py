@@ -138,7 +138,7 @@ class Row(DBTable):
 
 
 if __name__ == "__main__":
-    #db = DBFactory.postgres(conninfo="postgresql://quazy:quazy@127.0.0.1/quazy")
+    #db = DBFactory.postgres("postgresql://quazy:quazy@127.0.0.1/quazy")
     db = DBFactory.sqlite("file:quazy.db?mode=rwc")
     db.bind_module()
 
@@ -199,11 +199,13 @@ if __name__ == "__main__":
 
     print("Books:", Seller.get(name="Alibazon").books.fetch())
 
-    s = Seller.get(name="Alibazon").load()
+    s = Seller.get(name="Alibazon")
+    s.load()
     for b in s.books.fetch():
         print(b.name)
 
-    b = Book.get(name="Rust for noobies").load()
+    b = Book.get(name="Rust for noobies")
+    b.load()
     for s in b.sellers:
         print(s.name)
 
@@ -317,3 +319,5 @@ if __name__ == "__main__":
     o.rows.append(Row())
     o.save()
     # it is OK
+
+    db.close()

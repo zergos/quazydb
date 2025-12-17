@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import inspect
 
+from psycopg import AsyncCursor
+
 from .db_types import *
 from .translator import Translator, ArgStr
 from .exceptions import *

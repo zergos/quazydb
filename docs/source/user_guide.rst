@@ -236,3 +236,46 @@ Make sure you put valid datas in your tables before database engine becomes conf
     User(name=123)
     # quazy.exceptions.QuazyFieldTypeError: Field `name` in `User` has wrong type: 1 validation error for str
     #  Input should be a valid string [type=string_type, input_value=123, input_type=int]
+
+Asyncio support
+===============
+
+Use benefits of concurrent coding right out of the box.
+
+..  code-block:: python
+
+    import asyncio
+    import random
+
+    from quazy import DBFactoryAsync, DBTable
+
+    class Product(DBTable):
+        name: str
+        price: float
+        description: str = None
+
+
+    async def main():
+        db = DBFactoryAsync.postgres("postgresql://quazy:quazy@127.0.0.1/quazy")
+        db._debug_mode = True
+        db.bind_module()
+
+        await db.clear()
+        await db.create()
+
+        for i in range(100):
+            await db.insert(Product(name=f'Product #{i + 1}', price=random.randint(1, 1000) / 100))
+
+        q = Product.query().filter(lambda x: x.price >= 5)
+        print("Total amount:", await q.fetch_count())
+        print("Average price:", await q.fetch_avg("price"))
+        print("Products:")
+        async for x in q:
+            print(x.name, "->", x.price)
+
+    if __name__ == "__main__":
+        asyncio.run(main())
+
+..  note:: SQLite support
+
+    To run SQLite connection in async mode please install `aiosqlite` module.

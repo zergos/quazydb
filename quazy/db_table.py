@@ -6,6 +6,7 @@ import re
 import sys
 import inspect
 import itertools
+import asyncio
 
 if sys.version_info >= (3, 14):
     import annotationlib
@@ -22,11 +23,12 @@ from .db_field import DBField, UX, DBManyField, DBManyToManyField
 from .db_types import *
 from .db_types import DBTableT
 from .exceptions import *
+from .helpers import make_async
 
 if typing.TYPE_CHECKING:
     from typing import *
-    from .db_factory import DBFactory
-    from .db_query import DBQuery, DBQueryField, DBSQL, FDBSQL
+    from .db_factory import DBFactory, DBFactoryAsync
+    from .db_query import DBQuery, DBQueryAsync, DBQueryField, DBSQL, FDBSQL
 
 __all__ = ['DBTable']
 
@@ -485,7 +487,7 @@ class DBTable(metaclass=MetaTable):
         metadata: typing.ClassVar[dict[str, typing.Any]]
 
     class ItemGetter(typing.Generic[DBTableT]):
-        def __init__(self, db: DBFactory, table: type[DBTableT], field_name: str, pk_value: Any, view: str = None):
+        def __init__(self, db: DBFactory | DBFactoryAsync, table: type[DBTableT], field_name: str, pk_value: Any, view: str = None):
             self._db = db
             self._table = table
             self._attr_name = field_name
@@ -506,13 +508,22 @@ class DBTable(metaclass=MetaTable):
             if item in self._cache:
                 return self._cache[item]
 
+            if self._db.async_mode:
+                raise QuazyWrongOperation("In async mode use `fetch` first")
             value = self._db.query(self._table).select(item).filter(pk=self._pk_value).fetch_value()
             self._cache[item] = value
             return value
 
-        def fetch(self, *fields) -> DBTableT:
+        def fetch(self, *fields) -> Awaitable[DBTableT] | DBTableT:
             actual_fields = fields + ('pk',) if fields else ()
             value = self._db.query(self._table).select(*actual_fields).filter(pk=self._pk_value).fetch_one()
+            self._cache |= value.__dict__
+            return value
+
+    class ItemGetterAsync(ItemGetter[DBTableT]):
+        async def fetch(self, *fields) -> DBTableT:
+            actual_fields = fields + ('pk',) if fields else ()
+            value = await self._db.query(self._table).select(*actual_fields).filter(pk=self._pk_value).fetch_one()
             self._cache |= value.__dict__
             return value
 
@@ -524,9 +535,15 @@ class DBTable(metaclass=MetaTable):
             self._pk_value = pk_value
             super().__init__()
 
-        def fetch(self, *fields) -> list[DBTableT]:
+        def fetch(self, *fields) -> Awaitable[list[DBTableT]] | list[DBTableT]:
             actual_fields = fields + ('pk',) if fields else ()
             self[:] = self._db.query(self._table).select(*actual_fields).filter(lambda x: getattr(x, self._field_name) == self._pk_value).fetch_all()
+            return self
+
+    class ListGetterAsync(ListGetter[DBTableT]):
+        async def fetch(self, *fields) -> list[DBTableT]:
+            actual_fields = fields + ('pk',) if fields else ()
+            self[:] = await self._db.query(self._table).select(*actual_fields).filter(lambda x: getattr(x, self._field_name) == self._pk_value).fetch_all()
             return self
 
     @classmethod
@@ -553,21 +570,22 @@ class DBTable(metaclass=MetaTable):
         object.__setattr__(self, self.DB.pk.name, None)
 
         if not self.DB.use_slots:
+            list_getter_cls = DBTable.ListGetter if not self._db_.async_mode else DBTable.ListGetterAsync
             for field_name, field in self.DB.many_fields.items():
                 if self_id is not None:
-                    object.__setattr__(self, field_name, DBTable.ListGetter(self._db_, field.foreign_table, field.foreign_field, self_id))
+                    object.__setattr__(self, field_name, list_getter_cls(self._db_, field.foreign_table, field.foreign_field, self_id))
                 else:
                     object.__setattr__(self, field_name, list())
 
             for field_name, subtable in self.DB.subtables.items():
                 if self_id is not None:
-                    object.__setattr__(self, field_name, DBTable.ListGetter(self._db_, subtable, self.DB.table, self_id))
+                    object.__setattr__(self, field_name, list_getter_cls(self._db_, subtable, self.DB.table, self_id))
                 else:
                     object.__setattr__(self, field_name, list())
 
             for field_name, field in self.DB.many_to_many_fields.items():
                 if self_id is not None:
-                    object.__setattr__(self, field_name, DBTable.ListGetter(self._db_, field.foreign_table, field.foreign_field, self_id))
+                    object.__setattr__(self, field_name, list_getter_cls(self._db_, field.foreign_table, field.foreign_field, self_id))
                 else:
                     object.__setattr__(self, field_name, list())
 
@@ -610,7 +628,8 @@ class DBTable(metaclass=MetaTable):
                     continue
                 elif field.ref:
                     view = initial.pop(f'{k}__view', None)
-                    object.__setattr__(self, k, DBTable.ItemGetter(self._db_, field.type, field.name, v.pk if isinstance(v, DBTable) else v, view))
+                    getter_class = DBTable.ItemGetter if not self.DB.db.async_mode else DBTable.ItemGetterAsync
+                    object.__setattr__(self, k, getter_class(self.DB.db, field.type, field.name, v.pk if isinstance(v, DBTable) else v, view))
                     continue
                 elif field.property and not cls.DB.db.translator.supports_cast_converter:
                     v = cls.DB.db.translator.cast_value(field, v)
@@ -630,7 +649,7 @@ class DBTable(metaclass=MetaTable):
                 self._modified_fields_.add(key)
         return super().__setattr__(key, value)
 
-    def __class_getitem__(cls, item: Any) -> Self:
+    def __class_getitem__(cls, item: Any) -> Awaitable[Self] | Self:
         if not cls.DB.db:
             raise QuazyWrongOperation(f"Table `{cls.__qualname__}` is not assigned to a database")
         return cls.DB.db.get(cls, item)
@@ -647,7 +666,7 @@ class DBTable(metaclass=MetaTable):
             raise QuazyWrongOperation(f"Table `{cls.__qualname__}` is not assigned to a database")
 
     @classmethod
-    def get(cls, pk: Any = None, **fields) -> Self:
+    def get(cls, pk: Any = None, **fields) -> Awaitable[Self] | Self:
         """Get DBTable instance by primary key value
 
         Args:
@@ -657,16 +676,16 @@ class DBTable(metaclass=MetaTable):
         cls.check_db()
         return cls.DB.db.get(cls, pk, **fields)
 
-    def save(self, **kwargs) -> Self:
+    def save(self, **kwargs) -> Awaitable[Self] | Self:
         """Save DBTable instance changes to a database
 
         Args:
             kwargs: additional values to update item fields before saving it to the database
         """
         self.check_db()
-        return self.DB.db.save(self, **kwargs)
+        return self._db_.save(self, **kwargs)
 
-    def load(self, selected_field_name: str | None = None) -> Self:
+    def load(self, selected_field_name: str | None = None) -> Awaitable[None] | None:
         """Load related items from foreign tables
 
         Args:
@@ -674,20 +693,19 @@ class DBTable(metaclass=MetaTable):
         """
         self.check_db()
         if selected_field_name is not None:
-            getattr(self, selected_field_name).fetch()
+            return getattr(self, selected_field_name).fetch()
         else:
+            collection = []
             for field_name in itertools.chain(self.DB.subtables, self.DB.many_fields, self.DB.many_to_many_fields):
-                getattr(self, field_name).fetch()
+                collection.append(getattr(self, field_name).fetch())
+            if self._db_.async_mode:
+                return asyncio.gather(*collection)
+        return None
 
-        return self
-
-    def fetch(self, *fields) -> Self:
-        return self
-
-    def delete(self):
+    def delete(self) -> Awaitable[None] | None:
         """Delete DBTable instance from a database"""
         self.check_db()
-        self.DB.db.delete(item=self)
+        return self._db_.delete(item=self)
 
     @classmethod
     def query(cls, name: str | None = None) -> DBQuery[Self]:

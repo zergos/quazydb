@@ -4,7 +4,7 @@ import json
 import sqlite3
 import typing
 from collections import namedtuple
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 
 from .db_types import *
 from .translator_psql import TranslatorPSQL, ArgStr
@@ -241,11 +241,52 @@ class CursorFactory(sqlite3.Cursor):
         else:
             return super().execute(sql, values)
 
-def register_sqlite_converters() -> None:
+def register_sqlite_converters(module) -> None:
     for typ, conv in SQLITE_CONVERTERS.items():
-        sqlite3.register_converter(typ, conv)
+        module.register_converter(typ, conv)
     for typ, conv in SQLITE_ADAPTERS:
-        sqlite3.register_adapter(typ, conv)
+        module.register_adapter(typ, conv)
 
-register_sqlite_converters()
+register_sqlite_converters(sqlite3)
 sqlite3.enable_callback_tracebacks(True)
+
+try:
+    import aiosqlite
+except ModuleNotFoundError:
+    pass
+else:
+    class ConnectionFactoryAsync(aiosqlite.Connection):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+        @aiosqlite.core.contextmanager
+        async def cursor(self) -> aiosqlite.Cursor:
+            """Create an aiosqlite cursor wrapping a sqlite3 cursor object."""
+            return CursorFactoryAsync(self, await self._execute(self._conn.cursor))
+
+        @aiosqlite.core.contextmanager
+        async def execute(self, sql: str, parameters: Optional[Iterable[Any]] = None) -> aiosqlite.Cursor:
+            if parameters is None:
+                parameters = []
+            if sql.startswith(MULTI_COMMANDS_MARK):
+                cursor = await self._execute(self._conn.executescript, sql)
+            else:
+                cursor = await self._execute(self._conn.execute, sql, parameters)
+            return CursorFactoryAsync(self, cursor)
+
+        @asynccontextmanager
+        async def transaction(self):
+            yield
+
+
+    class CursorFactoryAsync(aiosqlite.Cursor):
+        async def execute(self, sql: str, parameters: Optional[Iterable[Any]] = None) -> aiosqlite.Cursor:
+            if parameters is None:
+                parameters = []
+            if sql.startswith(MULTI_COMMANDS_MARK):
+                await self._execute(self._cursor.executescript, sql)
+            else:
+                await self._execute(self._cursor.execute, sql, parameters)
+            return self
+
+register_sqlite_converters(aiosqlite)

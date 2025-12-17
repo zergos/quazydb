@@ -1,5 +1,6 @@
 import inspect
 import typing
+from abc import abstractmethod
 from typing import Optional
 from datetime import datetime, timedelta, date, time
 from decimal import Decimal
@@ -48,12 +49,15 @@ TYPE_MAP = {
     'StrEnum': str,
 }
 
-
 DBTableT = typing.TypeVar('DBTableT', bound='DBTable')
 AnyT = typing.TypeVar('AnyT')
 
-Many = typing.Annotated[list[DBTableT], "Many"]
-ManyToMany = typing.Annotated[list[DBTableT], "ManyToMany"]
+class ManyProtocol(typing.MutableSequence[DBTableT]):
+    @abstractmethod
+    def fetch(self) -> typing.Awaitable[typing.Self] | typing.Self: ...
+
+Many = typing.Annotated[ManyProtocol[DBTableT], "Many"]
+ManyToMany = typing.Annotated[ManyProtocol[DBTableT], "ManyToMany"]
 FieldCID = typing.Annotated[AnyT, 'FieldCID']
 Property = typing.Annotated[AnyT, 'Property']
 ObjVar = typing.Annotated[AnyT, 'ObjVar']
