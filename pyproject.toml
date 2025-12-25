@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quazydb"
-license = {text = "Apache 2.0"}
+license  = "Apache-2.0"
 authors = [
     {name = "Andrey Aseev", email = "andrey@aseev.biz"}
 ]
