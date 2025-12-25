@@ -12,19 +12,18 @@ class AsyncTransformer(ast.NodeTransformer):
     def __init__(self, func_names):
         self.func_names = func_names
 
-    def should_replace_with_async(self, func_node):
-        # Checks if the function node (Name or Attribute) has an async counterpart.
-        if isinstance(func_node, ast.Name):
+    def should_replace_with_async(self, node):
+        if isinstance(node, ast.Name):
             return ast.Name in self.func_names
 
-        if isinstance(func_node, ast.Attribute):
-            return func_node.attr in self.func_names
+        if isinstance(node, ast.Attribute):
+            return node.attr in self.func_names
 
-        if isinstance(func_node, ast.Call):
-            return self.should_replace_with_async(func_node.func)
+        if isinstance(node, ast.Call):
+            return self.should_replace_with_async(node.func)
 
-        if isinstance(func_node, ast.Await):
-            return self.should_replace_with_async(func_node.value)
+        if isinstance(node, ast.Await):
+            return self.should_replace_with_async(node.value)
 
         return False
 
@@ -37,7 +36,7 @@ class AsyncTransformer(ast.NodeTransformer):
 
         return node
 
-    def visit_With(self, node):
+    def visit_With(self, node: ast.With):
         # Check if any context manager usage needs to be async
         should_convert = False
         for item in node.items:
