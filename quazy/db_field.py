@@ -119,9 +119,9 @@ class UX:
         resizable: allows resizing column of field in tables
         meta:      additional data for UI specific
     """
-    field: DBField = data_field(init=False)
-    _name: str = ''
-    _type: 'type' = None
+    _field: DBField = data_field(init=False)
+    name: str = ''
+    type: 'type' = None
     title: str = ''
     width: int = None
     choices: Mapping[str, Any] = None
@@ -138,14 +138,15 @@ class UX:
             self.title = self.name
 
     @property
-    def name(self) -> str:
-        """original field name"""
-        return self.field.name if hasattr(self, "field") else self._name
+    def field(self) -> DBField:
+        return self._field
 
-    @property
-    def type(self) -> 'type':
-        """original field type"""
-        return self.field.type if hasattr(self, "field") else self._type
+    @field.setter
+    def field(self, field: DBField):
+        self._field = field
+        self.name = field.name
+        self.type = field.type
+
 
 @dataclass
 class DBManyField:
