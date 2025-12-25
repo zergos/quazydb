@@ -71,7 +71,7 @@ class AsyncTransformer(ast.NodeTransformer):
         self.generic_visit(node)
 
         if self.should_replace_with_async(node.iter):
-            new_node = ast.AsyncFor(target=node.target, iter=node.iter, body=node.body)
+            new_node = ast.AsyncFor(target=node.target, iter=node.iter, body=node.body, orelse=node.orelse)
             return ast.copy_location(new_node, node)
 
         return node
