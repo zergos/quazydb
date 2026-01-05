@@ -225,10 +225,11 @@ class ConnectionFactory(sqlite3.Connection):
         self.commit()
 
     def execute(self, sql: str, values: Optional[Sequence[Any]] = ()) -> Iterable[Any]:
-        if sql.startswith(MULTI_COMMANDS_MARK):
-            return self.executescript(sql[len(MULTI_COMMANDS_MARK):])
-        else:
-            return super().execute(sql, values)
+        with self.cursor() as curr:
+            if sql.startswith(MULTI_COMMANDS_MARK):
+                return curr.executescript(sql[len(MULTI_COMMANDS_MARK):])
+            else:
+                return curr.execute(sql, values)
 
     @contextmanager
     def transaction(self):
@@ -289,4 +290,4 @@ else:
                 await self._execute(self._cursor.execute, sql, parameters)
             return self
 
-register_sqlite_converters(aiosqlite)
+    register_sqlite_converters(aiosqlite)

@@ -15,9 +15,8 @@ Install the module::
 
 Optionally, prepare empty database on Postgres::
 
-    CREATE DATABASE quazy;
     CREATE USER quazy WITH PASSWORD 'quazy';
-    GRANT ALL PRIVILEGES ON DATABASE quazy TO quazy;
+    CREATE DATABASE quazy WITH OWNER quazy;
 
 ..  note::
 
