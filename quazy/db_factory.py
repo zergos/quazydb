@@ -8,7 +8,7 @@ import asyncio
 import sys
 import inspect
 from collections import defaultdict
-from contextlib import contextmanager, asynccontextmanager
+from contextlib import contextmanager, asynccontextmanager, nullcontext
 
 from .exceptions import *
 from .db_table import *
@@ -106,14 +106,11 @@ class DBFactory:
                     self.conn = psycopg.connect(conninfo, **kwargs)
                 return self.conn
             @contextmanager
-            def cursor(self, read_only: bool=False, _curr: DBCursorLike=None) -> Generator[DBCursorLike]:
-                if _curr is not None:
-                    yield _curr
-                else:
-                    with self.connection().cursor(binary=True) as curr:
-                        yield curr
-                    if not read_only:
-                        self.conn.commit()
+            def cursor(self, read_only: bool=False) -> Generator[DBCursorLike]:
+                with self.connection().cursor(binary=True) as curr:
+                    yield curr
+                if not read_only:
+                    self.conn.commit()
             def close(self):
                 self.conn.close()
 
@@ -149,10 +146,7 @@ class DBFactory:
             def connection(self) -> ContextManager[DBConnectionLike]:
                 return pool.connection()
             @contextmanager
-            def cursor(self, read_only:bool=False, _curr: DBCursorLike=None) -> Generator[DBCursorLike]:
-                if _curr is not None:
-                    yield _curr
-                    return
+            def cursor(self, read_only:bool=False) -> Generator[DBCursorLike]:
                 with self.connection() as conn:
                     with conn.cursor(binary=True) as curr:
                         yield curr
@@ -183,12 +177,7 @@ class DBFactory:
             @contextmanager
             def connection(self) -> Generator[DBConnectionLike]:
                 yield connection
-            @contextmanager
-            def _cursor(self, _curr: DBCursorLike):
-                yield _curr
-            def cursor(self, read_only:bool=False, _curr: DBCursorLike=None) -> ContextManager[DBCursorLike]:
-                if _curr is not None:
-                    return self._cursor(_curr)
+            def cursor(self, read_only:bool=False) -> ContextManager[DBCursorLike]:
                 return connection.cursor()
             def close(self):
                 connection.close()
@@ -324,7 +313,7 @@ class DBFactory:
 
     @hybrid_contextmanager
     def cursor(self, read_only: bool=False, _curr: DBCursorLike=None) -> AsyncGenerator[DBCursorLike] | Generator[DBCursorLike]:
-        with self._connection_pool.cursor(read_only, _curr) as cursor:
+        with self._connection_pool.cursor(read_only) if _curr is None else nullcontext(_curr) as cursor:
             yield cursor
 
     def clear(self, schema: str = None) -> Awaitable[None] | None:
@@ -840,15 +829,12 @@ class DBFactoryAsync(DBFactory):
                     self.conn = await psycopg.AsyncConnection.connect(conninfo, **kwargs)
                 return self.conn
             @asynccontextmanager
-            async def cursor(self, read_only: bool=False, _curr: DBCursorLike=None) -> ContextManager[DBCursorLike]:
-                if _curr is not None:
-                    yield _curr
-                else:
-                    conn = await self.connection()
-                    async with conn.cursor(binary=True) as curr:
-                        yield curr
-                    if not read_only:
-                        await self.conn.commit()
+            async def cursor(self, read_only: bool=False) -> ContextManager[DBCursorLike]:
+                conn = await self.connection()
+                async with conn.cursor(binary=True) as curr:
+                    yield curr
+                if not read_only:
+                    await self.conn.commit()
             async def close(self):
                 await self.conn.close()
 
@@ -877,10 +863,7 @@ class DBFactoryAsync(DBFactory):
                 async with self.pool.connection() as conn:
                     yield conn
             @asynccontextmanager
-            async def cursor(self, read_only:bool=False, _curr: DBCursorLike=None) -> AsyncGenerator[DBCursorLike]:
-                if _curr is not None:
-                    yield _curr
-                    return
+            async def cursor(self, read_only:bool=False) -> AsyncGenerator[DBCursorLike]:
                 async with self.connection() as conn:
                     async with conn.cursor(binary=True) as curr:
                         yield curr
@@ -911,10 +894,7 @@ class DBFactoryAsync(DBFactory):
                     await self.conn.execute("PRAGMA foreign_keys = ON")
                 return self.conn
             @asynccontextmanager
-            async def cursor(self, read_only:bool=False, _curr: DBCursorLike=None) -> AsyncGenerator[DBCursorLike]:
-                if _curr is not None:
-                    yield _curr
-                    return
+            async def cursor(self, read_only:bool=False) -> AsyncGenerator[DBCursorLike]:
                 conn = await self.connection()
                 async with conn.cursor() as curr:
                     yield curr

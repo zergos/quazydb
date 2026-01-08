@@ -43,24 +43,13 @@ class AsyncTransformer(ast.NodeTransformer):
             if isinstance(item.context_expr, ast.Call):
                 if self.should_replace_with_async(item.context_expr.func):
                     should_convert = True
+            elif isinstance(item.context_expr, ast.IfExp):
+                if self.should_replace_with_async(item.context_expr.body):
+                    should_convert = True
 
         if should_convert:
-            new_items = []
-            for item in node.items:
-                if isinstance(item.context_expr, ast.Call) and self.should_replace_with_async(item.context_expr.func):
-                    # Recursively visit arguments
-                    item.context_expr.args = [self.visit(a) for a in item.context_expr.args]
-                    item.context_expr.keywords = [self.visit(k) for k in item.context_expr.keywords]
-                else:
-                    item.context_expr = self.visit(item.context_expr)
-
-                if item.optional_vars:
-                    self.visit(item.optional_vars)
-                new_items.append(item)
-
             new_body = [self.visit(stm) for stm in node.body]
-
-            new_node = ast.AsyncWith(items=new_items, body=new_body)
+            new_node = ast.AsyncWith(items=node.items, body=new_body)
             return ast.copy_location(new_node, node)
 
         self.generic_visit(node)
