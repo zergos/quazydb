@@ -10,6 +10,8 @@ import inspect
 from collections import defaultdict
 from contextlib import contextmanager, asynccontextmanager, nullcontext
 
+from psycopg import AsyncConnection
+
 from .exceptions import *
 from .db_table import *
 from .db_field import *
@@ -49,10 +51,15 @@ class DBFactory:
     """
     async_mode: ClassVar[bool] = False
 
-    def __init__(self, connection_pool: DBPoolLike, translator: Translator, named_factory: DBRowFactoryLike, dict_factory: DBRowFactoryLike, class_factory: DBRowFactoryLike):
+    def __init__(self,
+                 connection_pool: DBPoolLike,
+                 translator: type[Translator],
+                 named_factory: type[DBRowFactoryLike],
+                 dict_factory: type[DBRowFactoryLike],
+                 class_factory: type[DBRowFactoryLike]):
         """Basic constructor for database connection
 
-        Create a connection via a specific connection pool.
+        Create a connection via a specific connection pool. Intended to use internally.
 
         Note:
             Normally is not intended to run manually, as it intended to use of proxy constructors
@@ -63,7 +70,10 @@ class DBFactory:
 
         Args:
              connection_pool: Connection (or pool) to work with the database
-             debug_mode: Debug mode - writes all queries to logs before execution
+             translator: Translator class specified to a database type
+             named_factory: Database row factory class for named results
+             dict_factory: Database row factory class for dictionary results
+             class_factory: Database row factory class for class instance results
         """
         self._connection_pool: DBPoolLike = connection_pool
         self._translator = translator
@@ -84,13 +94,13 @@ class DBFactory:
 
         Args:
             conninfo: connection string to connect to a database
-            **kwargs: all keywords arguments passed to `psycopg` constructor, except `debug_mode`
+            **kwargs: all keywords arguments passed to `psycopg` constructor
 
         Returns:
             DBFactory instance or None
 
         Example:
-            db = DBFactory.postgres(conninfo="postgresql://quazy:quazy@localhost/quazy")
+            db = DBFactory.postgres("postgresql://quazy:quazy@localhost/quazy")
         """
         import psycopg
         from psycopg.rows import namedtuple_row, dict_row, kwargs_row
@@ -100,7 +110,7 @@ class DBFactory:
         connection.close()
 
         class PsycopgConnection:
-            conn: ContextManager[psycopg.Connection] = None
+            conn: psycopg.Connection = None
             def connection(self) -> ContextManager[DBConnectionLike] | DBConnectionLike:
                 if self.conn is None or self.conn.closed:
                     self.conn = psycopg.connect(conninfo, **kwargs)
@@ -175,7 +185,7 @@ class DBFactory:
 
         class SQLiteConnection:
             @contextmanager
-            def connection(self) -> Generator[DBConnectionLike]:
+            def connection(self) -> Generator[sqlite3.Connection]:
                 yield connection
             def cursor(self, read_only:bool=False) -> ContextManager[DBCursorLike]:
                 return connection.cursor()
@@ -813,7 +823,7 @@ class DBFactoryAsync(DBFactory):
     async_mode: ClassVar[bool] = True
 
     @staticmethod
-    def postgres(conninfo: str, **kwargs) -> Self | None:
+    def postgres(conninfo: str, **kwargs) -> DBFactoryAsync | None:
         import psycopg
         from psycopg.rows import namedtuple_row, dict_row, kwargs_row
         from .translator_psql import TranslatorPSQL
@@ -824,12 +834,12 @@ class DBFactoryAsync(DBFactory):
 
         class PsycopgConnection:
             conn: psycopg.AsyncConnection = None
-            async def connection(self) -> ContextManager[DBConnectionLike] | DBConnectionLike:
+            async def connection(self) -> AsyncContextManager[AsyncConnection] | AsyncConnection:
                 if self.conn is None or self.conn.closed:
                     self.conn = await psycopg.AsyncConnection.connect(conninfo, **kwargs)
                 return self.conn
             @asynccontextmanager
-            async def cursor(self, read_only: bool=False) -> ContextManager[DBCursorLike]:
+            async def cursor(self, read_only: bool=False) -> AsyncGenerator[DBCursorLike]:
                 conn = await self.connection()
                 async with conn.cursor(binary=True) as curr:
                     yield curr
@@ -841,7 +851,7 @@ class DBFactoryAsync(DBFactory):
         return DBFactoryAsync(PsycopgConnection(), TranslatorPSQL, namedtuple_row, dict_row, kwargs_row, debug_mode)
 
     @staticmethod
-    def postgres_pool(conninfo: str, **kwargs) -> DBFactory | None:
+    def postgres_pool(conninfo: str, **kwargs) -> DBFactoryAsync | None:
         import psycopg
         from psycopg_pool.pool_async import AsyncConnectionPool
         from psycopg.rows import namedtuple_row, dict_row, kwargs_row
@@ -873,7 +883,7 @@ class DBFactoryAsync(DBFactory):
         return DBFactoryAsync(PsycopgPoolConnection(), TranslatorPSQL, namedtuple_row, dict_row, kwargs_row)
 
     @staticmethod
-    def sqlite(conn_uri: str, **kwargs) -> DBFactory | None:
+    def sqlite(conn_uri: str, **kwargs) -> DBFactoryAsync | None:
         try:
             import aiosqlite
         except ImportError:
