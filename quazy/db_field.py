@@ -12,6 +12,8 @@ __all__ = ['DBField', 'UX', 'Unassigned']
 class Unassigned:
     pass
 
+property_operator = property
+
 @dataclass
 class DBField:
     """Table field description class
@@ -35,7 +37,7 @@ class DBField:
     """
     name: str = data_field(default='', init=False)
     column: str = ''
-    type: 'type[DBTable] | type' = data_field(default=None, init=False)
+    _type: 'type[DBTable] | type' = data_field(default=None, init=False)
     pk: bool = False
     cid: bool = False
     ref: bool = data_field(default=False, init=False)
@@ -54,8 +56,6 @@ class DBField:
         if self.default is not object or self.default_sql is not None:
             self.required = False
 
-
-
     def prepare(self, name: str):
         self.name = name
         if not self.column:
@@ -66,6 +66,16 @@ class DBField:
             if not self.ux.title:
                 self.ux.title = self.name
         self.ux.field = self
+
+    @property_operator
+    def type(self):
+        return self._type
+
+    @type.setter
+    def type(self, value):
+        self._type = value
+        if self.ux:
+            self.ux.type = value
 
     def _dump_schema(self) -> dict[str, Any]:
         from .db_types import db_type_name

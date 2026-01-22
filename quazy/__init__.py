@@ -9,6 +9,6 @@ from .db_query import __all__ as query__all__
 from .db_types import *
 from .db_types import __all__ as db_types__all__
 
-VERSION = "1.3.6"
+VERSION = "1.3.8"
 
 __all__ = [*db_factory__all__, *db_table__all__, *db_field__all__, *query__all__, *db_types__all__]
