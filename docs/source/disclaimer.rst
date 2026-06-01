@@ -21,20 +21,15 @@ And, for sure, I going to keep an eye on it for the lifetime.
 Features requests
 =================
 
-I am opened for suggestions to cover new featers, requested by you.
+I am opened for suggestions to cover new features, requested by you.
 
-Please, create new issue on GitHub and describe your business case. I don't promise to make it faster or like you
+Please, create new issue on GitHub and describe your case. I don't promise to make it faster or like you
 expected. But, in fact, you'll get very nice and smart conversation.
-
-Bugs
-====
-
-I adore finding bugs. Cooking them on a dinner. The one who brings me the most will give my special present.
 
 Donation
 ========
 
-Every coin makes me feel so good.
+Every coin makes me feel better.
 
 Consulting
 ==========
