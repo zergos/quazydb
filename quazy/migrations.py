@@ -138,8 +138,10 @@ class MigrationDifference(NamedTuple):
     def info(self) -> str:
         """Get textual information about the migration difference."""
         result = ''
-        if self.migration_index:
+        if self.migration_index is not None:
             result += f'Migration index: {self.migration_index}\n'
+        if not self.commands:
+            return result + "No changes"
         result += 'Commands:\n'
         result += '\n'.join(str(command) for command in self.commands)
         return result
