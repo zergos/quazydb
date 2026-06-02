@@ -578,7 +578,7 @@ class DBQuery(typing.Generic[DBTableT]):
             DBQuery.queries[self._hash] = self
 
     @contextmanager
-    def get_scheme(self) -> SimpleNamespace | DBQueryField[DBTableT]:
+    def get_scheme(self) -> Generator[SimpleNamespace | DBQueryField[DBTableT]]:
         """Scheme object for query context
 
         Scheme contains
@@ -626,14 +626,13 @@ class DBQuery(typing.Generic[DBTableT]):
             key: variable name
             value: variable value
 
-        Example:
-            .. code-block:: python
+        Example::
 
-                q = db.query(Figures).select("name")
-                q.filter(lambda x: x.angles == q.var('angles'))
-                for angle in range(3, 7):
-                    q['angle'] = angle
-                    print(q.fetch_one())
+            q = db.query(Figures).select("name")
+            q.filter(lambda x: x.angles == q.var('angles'))
+            for angle in range(3, 7):
+                q['angle'] = angle
+                print(q.fetch_one())
         """
         self.args[key] = value
         return DBSQL(self, self.db.translator.place_arg(key))
@@ -708,13 +707,12 @@ class DBQuery(typing.Generic[DBTableT]):
     def with_query(self, subquery: DBQuery, not_materialized: bool = False) -> DBSubqueryField:
         """Use another query result field for this query.
 
-        Example:
-            .. code-block:: python
+        Example::
 
-                q = db.query(Sales).select("date", "sum")
-                q2 = db.query()
-                sub = q2.with_query(q)
-                q2.select(total_sum=q2.sum(sub.sum))
+            q = db.query(Sales).select("date", "sum")
+            q2 = db.query()
+            sub = q2.with_query(q)
+            q2.select(total_sum=q2.sum(sub.sum))
 
         Arguments:
             subquery: subquery to use
@@ -735,15 +733,15 @@ class DBQuery(typing.Generic[DBTableT]):
     def select(self, *field_names: str, **fields: FDBSQL) -> DBQuery[DBTableT]:
         """Specify a list of selected fields
 
-        Don't call this method if you want to fetch a list of `DBTable` instances (with all fields).
-        Otherwise, include 'pk' in `field_names` or you will get a list of named tuples.
+        Don't call this method if you want to fetch a list of :class:`DBTable` instances (with all fields).
+        Otherwise, include "pk" in `field_names` or you will get a list of named tuples.
 
         Arguments:
             *field_names: names of fields to select
             **fields: fields to select, where values can be lambdas
 
         Returns:
-            `DBQuery` for chain calls
+            :class:`DBQuery` for chain calls
         """
         self._check_frozen()
         if not field_names and not fields:
@@ -770,7 +768,7 @@ class DBQuery(typing.Generic[DBTableT]):
             Use `select_objects` instead.
 
         Returns:
-            `DBQuery` for chain calls
+            :class:`DBQuery` for chain calls
         """
         self._check_frozen()
         self.fetch_objects = False
@@ -781,7 +779,7 @@ class DBQuery(typing.Generic[DBTableT]):
         """Select all fields specified for this query.
 
         Returns:
-            `DBQuery` for chain calls
+            :class:`DBQuery` for chain calls
         """
         self._check_frozen()
         self._check_fields()
@@ -804,7 +802,7 @@ class DBQuery(typing.Generic[DBTableT]):
             desc: sort ascending if False
 
         Returns:
-            `DBQuery` for chain calls
+            :class:`DBQuery` for chain calls
         """
         self._check_frozen()
         for field in fields:
@@ -819,18 +817,17 @@ class DBQuery(typing.Generic[DBTableT]):
         Hint:
             Use identical method name `where` for your preference.
 
-        Example:
-            .. code-block:: python
+        Example::
 
-                just_teens = Kids.select().filter(age=18)
-                older_then = Kids.select().filter(lambda x: x.age > 18)
+            just_teens = Kids.select().filter(age=18)
+            older_then = Kids.select().filter(lambda x: x.age > 18)
 
         Arguments:
             _expression: lambda expression to filter
             **kwargs: field/value pairs to filter
 
         Returns:
-            `DBQuery` for chain calls
+            :class:`DBQuery` for chain calls
         """
         self._check_frozen()
         if _expression is not None:
@@ -852,18 +849,17 @@ class DBQuery(typing.Generic[DBTableT]):
 
         Works like a negative filter (excluding elements from a selection)
 
-        Example:
-            .. code-block:: python
+        Example::
 
-                no_teens = Kids.select().exclude(age=18)
-                youngsters = Kids.select().exclude(lambda x: x.age > 18)
+            no_teens = Kids.select().exclude(age=18)
+            youngsters = Kids.select().exclude(lambda x: x.age > 18)
 
         Arguments:
             _expression: lambda expression to filter
             **kwargs: field/value pairs to filter
 
         Returns:
-            `DBQuery` for chain calls
+            :class:`DBQuery` for chain calls
         """
         self._check_frozen()
         if _expression is not None:
@@ -904,7 +900,7 @@ class DBQuery(typing.Generic[DBTableT]):
             *fields: list of field names or expressions to group
 
         Returns:
-            `DBQuery` for chain calls
+            :class:`DBQuery` for chain calls
         """
         self._check_frozen()
         for field in fields:
@@ -923,11 +919,10 @@ class DBQuery(typing.Generic[DBTableT]):
     def sum(self, expr: FDBSQL) -> DBSQL:
         """Use aggregated function `sum` as a part of the expression
 
-        Example:
-            .. code-block:: python
+        Example::
 
-                q = db.query(Posts)
-                q = q.group_by("topic").select("topic", total_views=q.sum("views_counter"))
+            q = db.query(Posts)
+            q = q.group_by("topic").select("topic", total_views=q.sum("views_counter"))
         """
         self.has_aggregates = True
         expr = self.resolve(expr)
@@ -942,11 +937,10 @@ class DBQuery(typing.Generic[DBTableT]):
             expr: expression as a path to the table field
             distinct: count distinct rows
 
-        Example:
-            .. code-block:: python
+        Example::
 
-                q = db.query(Posts)
-                q = q.group_by("topic").select("topic", total_views=q.count)
+            q = db.query(Posts)
+            q = q.group_by("topic").select("topic", total_views=q.count)
         """
         if expr is None:
             expr = DBSQL(self, '*')
@@ -978,16 +972,15 @@ class DBQuery(typing.Generic[DBTableT]):
 
         This is an analogue to SQL `CASE ...` statement.
 
-        Example:
-             .. code-block:: python
+        Example::
 
-                q = db.query(User)
-                c = q.case().
-                    condition("baby", lambda x: x.age <= 1).
-                    condition("toddler", lambda x: x.age <= 3).
-                    condition("kid", lambda x: x.age < 18).
-                    default("adult")
-                q.select("name", age_category=c)
+            q = db.query(User)
+            c = q.case().
+                condition("baby", lambda x: x.age <= 1).
+                condition("toddler", lambda x: x.age <= 3).
+                condition("kid", lambda x: x.age < 18).
+                default("adult")
+            q.select("name", age_category=c)
         """
         return DBConditionField(self)
 
@@ -1018,7 +1011,7 @@ class DBQuery(typing.Generic[DBTableT]):
     def describe(self) -> Awaitable[list[DBField]] | list[DBField]:
         """Request all result fields information.
 
-        See `DBFactory.describe()`
+        See :meth:`DBFactory.describe()`
         """
         self._check_fields()
         return self.db.describe(self)
@@ -1053,12 +1046,11 @@ class DBQuery(typing.Generic[DBTableT]):
         Arguments:
             expr_list: list, tuple or other iterator of expressions
 
-        Example:
-            .. code-block:: python
+        Example::
 
-                colors = ('green', 'yellow', 'red')
-                q = db.query(Apple)
-                q.filter(q.any(lambda x: x.color == color for color in colors))
+            colors = ('green', 'yellow', 'red')
+            q = db.query(Apple)
+            q.filter(q.any(lambda x: x.color == color for color in colors))
         """
         result = next(expr_list, None)
         while (expr:=next(expr_list, None)) is not None:
@@ -1116,11 +1108,10 @@ class DBQuery(typing.Generic[DBTableT]):
 
         This group of functions is intended to estimate query metrics and numbers before real execution.
 
-        Example:
-            .. code-block:: python
+        Example::
 
-                q = db.query(Posts).filter(lambda x: x.created_at >= datetime.now() - timedelta(days=10))
-                print(q.fetch_count())
+            q = db.query(Posts).filter(lambda x: x.created_at >= datetime.now() - timedelta(days=10))
+            print(q.fetch_count())
 
         Arguments:
             function: SQL-friendly aggregate function name
@@ -1174,16 +1165,15 @@ class DBQuery(typing.Generic[DBTableT]):
             next_name: name of the field with an identifier of the next row
             start_value: starting identifier value for the first row in the chain
 
-        Example:
-            ..  code-block:: python
+        Example::
 
-                class Chained(DBTable):
-                    index: int
-                    next: int
-                    name: str
+            class Chained(DBTable):
+                index: int
+                next: int
+                name: str
 
-                q = Chained.chained("index", "next", 1)
-                print(q.fetch_all())
+            q = Chained.chained("index", "next", 1)
+            print(q.fetch_all())
         """
         self._check_frozen()
         if self.table_class is None:

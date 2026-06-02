@@ -39,14 +39,13 @@ class DBFactory:
         It supports a Postgres database only at the moment
 
     Example:
-        .. code-block::
 
-            db = DBFactory.postgres(conninfo="postgresql://quazy:quazy@localhost/quazy")
-            db._debug_mode = True
-            db.bind_module()
-            db.clear()
-            db.create()
-            ...
+        db = DBFactory.postgres(conninfo="postgresql://quazy:quazy@localhost/quazy")
+        db._debug_mode = True
+        db.bind_module()
+        db.clear()
+        db.create()
+        ...
 
     """
     async_mode: ClassVar[bool] = False
@@ -63,7 +62,7 @@ class DBFactory:
 
         Note:
             Normally is not intended to run manually, as it intended to use of proxy constructors
-            like `postgres()` below
+            like :meth:`postgres()` below
 
         Note:
             It is highly appreciated to work with databases supported pools.
@@ -99,7 +98,8 @@ class DBFactory:
         Returns:
             DBFactory instance or None
 
-        Example:
+        Example::
+
             db = DBFactory.postgres("postgresql://quazy:quazy@localhost/quazy")
         """
         import psycopg
@@ -135,9 +135,10 @@ class DBFactory:
             **kwargs: all keywords arguments passed to `psycopg` constructor, except `debug_mode`
 
         Returns:
-            DBFactory instance or None
+            :class:`DBFactory` instance or None
 
-        Example:
+        Example::
+
             db = DBFactory.postgres_pool(conninfo="postgresql://quazy:quazy@localhost/quazy")
         """
         from psycopg_pool.pool import ConnectionPool
@@ -173,7 +174,8 @@ class DBFactory:
             conn_uri: connection string to connect to a database
             kwargs: all keywords arguments passed to `sqlite3` constructor, except `debug_mode`
 
-        Example:
+        Example::
+
             db = DBFactory.sqlite("file:test.db?mode=rwc")
         """
         import sqlite3
@@ -276,18 +278,19 @@ class DBFactory:
         raise KeyError(item)
 
     def query(self, table_class: Optional[type[DBTableT]] = None, name: Optional[str] = None) -> DBQuery[DBTableT]:
-        """Create DBQuery instance
+        """Create :class:`DBQuery` instance
 
-        Create a DBQuery instance bound to a specified DBTable or to the whole schema
+        Create a :class:`DBQuery` instance bound to a specified DBTable or to the whole schema
 
         Args:
             table_class: DBTable class to use or None
             name: name of the query for subquery request
 
         Returns:
-            DBQuery instance
+            :class:`DBQuery` instance
 
-        Example:
+        Example::
+
             q = db.query(Street).select('name')
             q = db.query().select(name=lambda s: s.street.name)
         """
@@ -306,7 +309,7 @@ class DBFactory:
             **fields: field values to filter row if no pk is specified (optional)
 
         Returns:
-            DBTable instance
+            :class:`DBTable` instance
         """
         query = self.query(table_class)
         if pk is not None:
@@ -639,7 +642,7 @@ class DBFactory:
             as_dict: results yield as dict instead of instance of DBTable/SimpleNamespace
 
         Yields:
-            instance of DBTable/SimpleNamespace or dict
+            instance of :class:`DBTable` or SimpleNamespace or dict
         """
         with self.cursor(read_only=True) as curr:
             if not isinstance(query, str):
@@ -686,7 +689,7 @@ class DBFactory:
             query: instance of DBQuery or string
 
         Returns:
-            list of `DBField` instances
+            list of :class:`DBField` instances
         """
         from quazy.db_query import DBQuery
         if typing.TYPE_CHECKING:

@@ -16,41 +16,23 @@ property_operator = property
 
 @dataclass
 class DBField:
-    """Table field description class
-
-    Attributes:
-        name:         field name in Python
-        column:       field/column name in database
-        type:         field type class
-        pk:           is it a primary key?
-        cid:          is it storage of table name for inherited tables ?
-        ref:          is it a foreign key (reference)?
-        body:         is it a body field for properties?
-        property:     is it a property field?
-        required:     is a field not null ?
-        indexed:      is it indexed for fast search ?
-        unique:       is it unique ?
-        default:      default value at Python level
-        default_sql:  default value at SQL level
-        reverse_name: reverse name for reference fields
-        ux:           UX/UI specific attributes
-    """
-    name: str = data_field(default='', init=False)
-    column: str = ''
-    _type: 'type[DBTable] | type' = data_field(default=None, init=False)
-    pk: bool = False
-    cid: bool = False
-    ref: bool = data_field(default=False, init=False)
-    body: bool = False
-    property: bool = False
-    required: bool = data_field(default=True, init=False)
-    indexed: bool = False
-    unique: bool = False
-    default: Union[Any, Callable[[DBTable], Any]] = Unassigned
-    default_sql: str = None
-    reverse_name: str = None
+    """Table field description class"""
+    name: str = data_field(default='', init=False)  #: field name in Python
+    column: str = ''  #: field/column name in database
+    _type: 'type[DBTable] | type' = data_field(default=None, init=False)  #: field type class
+    pk: bool = False  #: is it a primary key?
+    cid: bool = False  #: is it storage of table name for :ref:`derived tables <extendable>` ?
+    ref: bool = data_field(default=False, init=False)  #: is it a foreign key (reference)?
+    body: bool = False  #: is it a body field for :ref:`properties <properties>`?
+    property: bool = False  #: is it a :ref:`properties <properties>` field?
+    required: bool = data_field(default=True, init=False)  #: is a field not *null* ?
+    indexed: bool = False  #: is it indexed for fast search ?
+    unique: bool = False  #: is it unique ?
+    default: Union[Any, Callable[[DBTable], Any]] = Unassigned  #: default value at Python level
+    default_sql: str = None  #: default value at SQL level
+    reverse_name: str = None  #: reverse name for reference fields
     # many_field: bool = data_field(default=False, init=False)
-    ux: Optional[UX] = None
+    ux: Optional[UX] = None  #: UX/UI specific attributes
 
     def __post_init__(self):
         if self.default is not object or self.default_sql is not None:
@@ -61,7 +43,7 @@ class DBField:
         if not self.column:
             self.column = self.name
         if not self.ux:
-            self.ux = UX(self.name, blank=not self.required)
+            self.ux = UX(self.name, blank=not self.required, hidden=self.body)
         else:
             if not self.ux.title:
                 self.ux.title = self.name
@@ -115,33 +97,20 @@ class UX:
 
     This class contains the most common visual representation properties. It isn't used in Quazy directly, but it
     helps to integrate with any GUI framework.
-
-    Attributes:
-        field:     reference to original field
-        title:     user level title of a field
-        width:     integer size in GUI specific units (usually, letters amount)
-        choices:   select value by user level title from dropdown list
-        blank:     allow field unfilled
-        readonly:  disable modifications of a field
-        multiline: enable multiline editor for a text field
-        hidden:    hide field from UI
-        sortable:  allows sorting by field values in tables
-        resizable: allows resizing column of field in tables
-        meta:      additional data for UI specific
     """
     _field: DBField = data_field(init=False)
-    name: str = ''
-    type: 'type' = None
-    title: str = ''
-    width: int = None
-    choices: Mapping[str, Any] = None
-    blank: bool = False
-    readonly: bool = False
-    multiline: bool = False
-    hidden: bool = False
-    sortable: bool = True
-    resizable: bool = True
-    meta: dict[str, Any] = data_field(default_factory=dict)
+    name: str = ''  #:
+    type: 'type' = None  #:
+    title: str = ''  #: user level title of a field
+    width: int = None  #: integer size in GUI specific units (usually, letters amount)
+    choices: Mapping[str, Any] = None  #: select value by user level title from dropdown list
+    blank: bool = False  #: allow field unfilled
+    readonly: bool = False  #: disable modifications of a field
+    multiline: bool = False  #: enable multiline editor for a text field
+    hidden: bool = False  #: hide field from UI
+    sortable: bool = True  #: allows sorting by field values in tables
+    resizable: bool = True  #: allows resizing column of field in tables
+    meta: dict[str, Any] = data_field(default_factory=dict)  #: additional data for UI specific
 
     def __post_init__(self):
         if self.name and not self.title:
@@ -149,6 +118,7 @@ class UX:
 
     @property
     def field(self) -> DBField:
+        """reference to original field"""
         return self._field
 
     @field.setter
