@@ -20,6 +20,7 @@ Table class
 ===========
 .. autoclass:: quazy::DBTable
     :members:
+    :private-members:
 
 Queries
 =======

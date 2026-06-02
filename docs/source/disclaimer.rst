@@ -9,6 +9,7 @@ in different ways.
 
 I would highly recommend to use this in big production, but you would not listen. Just let me give you
 some fire facts about QuazyDB:
+
  - it is very easy to start, since no big prelude necessary
  - it has codeless models, since data model definition is based on intuitive compact annotations
  - write queries like you write your regular Python expressions

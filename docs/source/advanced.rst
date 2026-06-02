@@ -7,37 +7,37 @@ Fields declaration
 Types
 -----
 
-+-----------+------------------+-----------+
-| Python    | pSQL             | SQLite    |
-+===========+==================+===========+
-| int       | integer          | INTEGER   |
-+-----------+------------------+-----------+
-| float     | double precision | REAL      |
-+-----------+------------------+-----------+
-| str       | text             | TEXT      |
-+-----------+------------------+-----------+
-| bytes     | bytea            | BLOB      |
-+-----------+------------------+-----------+
-| datetime  | timestamp        | DATETIME* |
-+-----------+------------------+-----------+
-| time      | time             | TIME*     |
-+-----------+------------------+-----------+
-| date      | date             | DATE*     |
-+-----------+------------------+-----------+
-| timedelta | interval         | TIMEDELTA*|
-+-----------+------------------+-----------+
-| bool      | boolean          | BOOLEAN*  |
-+-----------+------------------+-----------+
-| dict      | jsonb            | JSON*     |
-+-----------+------------------+-----------+
-| UUID      | uuid             | UUID*     |
-+-----------+------------------+-----------+
-| IntEnum   | integer          | INTEGER   |
-+-----------+------------------+-----------+
-| StrEnum   | text             | TEXT      |
-+-----------+------------------+-----------+
++-----------+------------------+-----------------+
+| Python    | pSQL             | SQLite          |
++===========+==================+=================+
+| int       | integer          | INTEGER         |
++-----------+------------------+-----------------+
+| float     | double precision | REAL            |
++-----------+------------------+-----------------+
+| str       | text             | TEXT            |
++-----------+------------------+-----------------+
+| bytes     | bytea            | BLOB            |
++-----------+------------------+-----------------+
+| datetime  | timestamp        | DATETIME [#a]_  |
++-----------+------------------+-----------------+
+| time      | time             | TIME [#a]_      |
++-----------+------------------+-----------------+
+| date      | date             | DATE [#a]_      |
++-----------+------------------+-----------------+
+| timedelta | interval         | TIMEDELTA [#a]_ |
++-----------+------------------+-----------------+
+| bool      | boolean          | BOOLEAN [#a]_   |
++-----------+------------------+-----------------+
+| dict      | jsonb            | JSON [#a]_      |
++-----------+------------------+-----------------+
+| UUID      | uuid             | UUID [#a]_      |
++-----------+------------------+-----------------+
+| IntEnum   | integer          | INTEGER         |
++-----------+------------------+-----------------+
+| StrEnum   | text             | TEXT            |
++-----------+------------------+-----------------+
 
-*) SQLite custom type
+.. [#a] SQLite custom type
 
 Declaration
 -----------
@@ -224,6 +224,8 @@ Substitute tables
     print("Total sum:", q.fetch_sum("total"))
     print("Items:", ", ".join(q.fetch_list()))
 
+.. _meta tables:
+
 Meta tables
 ===========
 
@@ -269,6 +271,8 @@ But if you have groups of common usable tables fields, you can use "meta" tables
         pass
 
 
+.. _extendable:
+
 Joined Table Inheritance
 ========================
 
@@ -305,6 +309,7 @@ In the example below only one table created in database, named `catalog`.
     print(Supplier.select("name").fetch_list())
     print(Customer.select("name").fetch_list())
 
+.. _properties:
 
 Lightweight JSON properties
 ===========================
@@ -478,7 +483,7 @@ Example
 Data validation
 ===============
 
-It is possible to enable data validaton with `pydantic` module. Validation is enabled by default if this module is
+It is possible to enable data validation with :mod:`pydantic` module. Validation is enabled by default if this module is
 installed, otherwise, `QuazyDB` should be installed by specifying this explicitly::
 
     pip install quazydb[strict]
