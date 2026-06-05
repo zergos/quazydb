@@ -12,14 +12,24 @@ __all__ = ['DBField', 'UX', 'Unassigned']
 class Unassigned:
     pass
 
-property_operator = property
-
 @dataclass
 class DBField:
     """Table field description class"""
+
+    _type: 'type[DBTable] | type' = data_field(default=None, init=False)
+    @property
+    def type(self):
+        """field type class"""
+        return self._type
+
+    @type.setter
+    def type(self, value):
+        self._type = value
+        if self.ux:
+            self.ux.type = value
+
     name: str = data_field(default='', init=False)  #: field name in Python
     column: str = ''  #: field/column name in database
-    _type: 'type[DBTable] | type' = data_field(default=None, init=False)  #: field type class
     pk: bool = False  #: is it a primary key?
     cid: bool = False  #: is it storage of table name for :ref:`derived tables <extendable>` ?
     ref: bool = data_field(default=False, init=False)  #: is it a foreign key (reference)?
@@ -49,16 +59,6 @@ class DBField:
                 self.ux.title = self.name
         self.ux.field = self
 
-    @property_operator
-    def type(self):
-        return self._type
-
-    @type.setter
-    def type(self, value):
-        self._type = value
-        if self.ux:
-            self.ux.type = value
-
     def _dump_schema(self) -> dict[str, Any]:
         from .db_types import db_type_name
 
@@ -87,7 +87,7 @@ class DBField:
         field.prepare(name)
         field.ref = ref
         field.required = required
-        field._pre_type = db_type_by_name(f_type)
+        field._type = db_type_by_name(f_type)
         return field
 
 

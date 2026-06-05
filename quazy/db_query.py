@@ -522,7 +522,7 @@ class DBQuery(typing.Generic[DBTableT]):
 
     def _collect_scheme(self, for_copy: bool = False):
         self.scheme: Union[SimpleNamespace, DBQueryField[DBTableT]] = DBScheme()
-        for table in self.db._tables:
+        for table in self.db._tables.values():
             setattr(self.scheme, table.DB.snake_name, DBQueryField(self, table))
 
         if self.table_class is not None:
@@ -533,7 +533,18 @@ class DBQuery(typing.Generic[DBTableT]):
             self.scheme = table_space
 
             if not for_copy and self.table_class.DB.extendable:
-                self.filters.append(getattr(table_space, self.table_class.DB.cid.name) == self.arg(self.table_class.DB.discriminator))
+                if self.table_class.DB.owner is None:
+                    self.filters.append(
+                        getattr(table_space, self.table_class.DB.cid.name) ==
+                        self.arg(self.table_class.DB.discriminator))
+                else:
+                    self.filters.append(
+                        getattr(
+                            getattr(table_space, self.table_class.DB.owner.DB.table),
+                            self.table_class.DB.owner.DB.cid.name) ==
+                        self.arg(self.table_class.DB.owner.DB.discriminator)
+                    )
+
 
     def _check_frozen(self):
         if self.frozen_sql is not None:

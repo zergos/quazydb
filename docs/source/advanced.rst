@@ -200,8 +200,28 @@ Many-to-many relations
     q = Book.select(seller="sellers.name").filter(name="Alice in wonderland")
     print(q.fetch_list())
 
+.. _subtables:
+
 Substitute tables
 =================
+
+Subtables - are tables dependent on tables in 1xN relation. Usually, it is simply declared as two tables classes
+with a reference field.
+
+..  code-block:: python
+
+    class Receipt(DBTable):
+        created_at: datetime = DBField(default_sql="now()")
+        items: 'Many[ReceiptItem]' # <- helpers field
+
+    class ReceiptItem(DBTable):
+        receipt: Receipt # <- reference field makes relation 1xN
+        name: str
+        price: float
+        qty: float
+        total: float = DBField(default=lambda x: x.price * x.qty)
+
+It is possible to declare simpler using subclasses:
 
 ..  code-block:: python
 
@@ -308,6 +328,37 @@ In the example below only one table created in database, named `catalog`.
 
     print(Supplier.select("name").fetch_list())
     print(Customer.select("name").fetch_list())
+
+It also works with :ref:`subtables <subtables>`, with only one exception: `FieldCID` is not necessary to declare
+for substitute classes:
+
+..  code-block:: python
+
+    class Catalog(DBTable):
+        _extendable_ = True
+        cid: FieldCID[str]
+        number: int
+
+        class Row(DBTable):
+            _extendable_ = True
+            item: str
+
+    class Customer(Catalog):
+        name: str
+        start_date: datetime
+        vip_class: int | None
+
+        class Row(Catalog.Row):
+            shipment: str
+
+        def __repr__(self):
+            return f'delivery {self.item} -> to {self.shipment}'
+
+    c = Customer(number=56, name="Hungry mouse")
+    c.rows.append(Customer.Row(item="milk", shipment="storage"))
+    c.save()
+
+    print(Customer.get(number=56).rows.fetch())
 
 .. _properties:
 

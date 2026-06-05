@@ -76,7 +76,7 @@ class DBFactory:
         """
         self._connection_pool: DBPoolLike = connection_pool
         self._translator = translator
-        self._tables: list[type[DBTable]] = list()
+        self._tables: dict[str, type[DBTable]] = dict()
         self._named_factory = named_factory
         self._dict_factory = dict_factory
         self._class_factory = class_factory
@@ -207,6 +207,8 @@ class DBFactory:
             cls: Table to bind
             schema: schema name
         """
+        if cls.__qualname__ in self._tables:
+            return
         cls.DB.db = self
         if not cls.DB.schema:
             cls.DB.schema = schema
@@ -216,10 +218,7 @@ class DBFactory:
             if not subtab.DB.schema:
                 subtab.DB.schema = schema
 
-        if cls not in self._tables:
-            self._tables.append(cls)
-        setattr(self, cls.__name__, cls)
-        return cls
+        self._tables[cls.__qualname__] = cls
 
     def bind_module(self, name: str = None, schema: str = 'public'):
         """Bind a specific module by name to the database factory
@@ -259,23 +258,20 @@ class DBFactory:
         if schema is None:
             self._tables.clear()
         else:
-            for table in self._tables.copy():
+            for name, table in list(self._tables.items()):
                 if table.DB.schema == schema:
-                    self._tables.remove(table)
+                    del self._tables[name]
 
     def __contains__(self, item: str | DBTable) -> bool:
-        """Check if DBTable exists in the database factory"""
+        """Check if table exists in the database factory"""
         if isinstance(item, str):
-            return any(item == table.__qualname__ for table in self._tables)
-        else:
             return item in self._tables
+        else:
+            return item in self._tables.values()
         
     def __getitem__(self, item: str) -> type[DBTable]:
         """Get DBTable class by name"""
-        for table in self._tables:
-            if table.__qualname__ == item:
-                return table
-        raise KeyError(item)
+        return self._tables[item]
 
     def query(self, table_class: Optional[type[DBTableT]] = None, name: Optional[str] = None) -> DBQuery[DBTableT]:
         """Create :class:`DBQuery` instance
@@ -359,8 +355,8 @@ class DBFactory:
             List of table classes
         """
 
-        all_tables = self._tables.copy()
-        for table in self._tables:
+        all_tables = list(self._tables.values())
+        for table in self._tables.values():
             all_tables.extend(table.DB.subtables.values())
 
         ext: dict[str, list[type[DBTable]]] = defaultdict(list)
@@ -417,6 +413,7 @@ class DBFactory:
                 '__annotate_func__': lambda f: annotations,
                 '_db_': self,
                 '_table_': root_class.DB.table,
+                '_schema_': root_class.DB.schema,
                 '_extendable_': True,
                 **fields
             }))
@@ -515,7 +512,7 @@ class DBFactory:
                     raise QuazyMissedField(f"Field `{name}` value is missed for `{item.__class__.__name__}`")
             else:
                 value = getattr(item, name, DefaultValue)
-            if not inspect.isclass(value) and callable(value):
+            if inspect.isfunction(value):
                 # materialize values on saving
                 value = value()
                 object.__setattr__(item, name, value)
@@ -639,7 +636,10 @@ class DBFactory:
 
         Args:
             query: instance of DBQuery or string
-            as_dict: results yield as dict instead of instance of DBTable/SimpleNamespace
+            as_dict: results yield as dict instead of instance of :class:`DBTable` or SimpleNamespace or named tuple
+
+        Warning:
+            This method is intended only for data reading. To make modification request, use :meth:`execute` instead.
 
         Yields:
             instance of :class:`DBTable` or SimpleNamespace or dict
@@ -662,6 +662,22 @@ class DBFactory:
             else:
                 curr.row_factory = self._dict_factory if as_dict else self._named_factory
                 yield curr.execute(query)
+
+    @hybrid_contextmanager
+    def execute(self, query: str, as_dict: bool = False) -> (
+            AsyncGenerator[Iterator[DBTable | SimpleNamespace | dict[str, Any]]] |
+            Generator[Iterator[DBTable | SimpleNamespace | dict[str, Any]]]):
+        """Execute text query directly into database.
+
+        Similar to :meth:`select` method, but allow changes.
+
+        Args:
+            query: string
+            as_dict: results yield as dict instead named tuple
+        """
+        with self.cursor() as curr:
+            curr.row_factory = self._dict_factory if as_dict else self._named_factory
+            yield curr.execute(query)
 
     def update_many(self, query: DBQuery[DBTableT], **values) -> Awaitable[None] | None:
         """Update items in the database by a query
@@ -933,5 +949,6 @@ class DBFactoryAsync(DBFactory):
     update = make_async(DBFactory.update, ASYNC_COMMON_FUNCS + ('insert', 'save'))
     update_many = make_async(DBFactory.update_many, ASYNC_COMMON_FUNCS)
     select = make_async(DBFactory.select, ASYNC_COMMON_FUNCS)
+    execute = make_async(DBFactory.execute, ASYNC_COMMON_FUNCS)
     save = make_async(DBFactory.save, ASYNC_COMMON_FUNCS + ('fetch_value', 'update', 'insert'))
     delete = make_async(DBFactory.delete, ASYNC_COMMON_FUNCS + ('delete',))

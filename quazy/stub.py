@@ -118,11 +118,11 @@ def gen_stub(db: DBFactory, schema: str = None) -> str:
         else:
             init_chunk = ''
 
-        table_chunk = f"class {table.__name__}({', '.join(base.__qualname__ for base in table.__bases__)}):\n" + \
+        names = table.__qualname__.split('.')
+        table_chunk = f"class {names[-1]}({', '.join(base.__qualname__ for base in table.__bases__)}):\n" + \
             '\n'.join(field_chunks) + \
             init_chunk
 
-        names = table.__qualname__.split('.')
         if len(names) == 1:
             table_chunks[names[0]] = table_chunk
         else:

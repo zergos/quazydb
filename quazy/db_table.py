@@ -23,7 +23,6 @@ from .db_field import DBField, UX, DBManyField, DBManyToManyField
 from .db_types import *
 from .db_types import DBTableT
 from .exceptions import *
-from .helpers import make_async
 
 if typing.TYPE_CHECKING:
     from typing import *
@@ -73,7 +72,6 @@ class MetaTable(type):
         DB.many_to_many_fields = dict()
         DB.defaults = dict()
         attrs['DB'] = DB
-
 
         if DB.use_slots:
             attrs['__slots__'] = []
@@ -212,10 +210,11 @@ class MetaTable(type):
                 if base.DB.extendable:
                     if DB.extendable:
                         raise QuazyNotSupported('Multiple inheritance of extendable tables is not supported')
-                    DB.extendable = True
+                    DB.extendable = base.DB.extendable
                     DB.is_root = False
                     DB.cid = base.DB.cid
                     DB.table = base.DB.table
+                    DB.schema = base.DB.schema
                     DB.body = base.DB.body
 
         return fields
@@ -325,39 +324,44 @@ class MetaTable(type):
 
         :meta private:"""
         # eval refs
-        for name, field in cls.DB.fields.items():
+        for name, field in cls.DB.fields.items():  # type: str, DBField
             if field.ref:
-                rev_name = field.reverse_name or cls.DB.snake_name
+                rev_name: str = field.reverse_name or cls.DB.snake_name
                 if rev_name in field.type.DB.many_fields:
                     if field.type.DB.many_fields[rev_name].foreign_table is not cls:
                         raise QuazyFieldNameError(
-                            f'Cannot reuse Many field in table `{field.type.__name__}` with name `{rev_name}`, it is associated with table `{field.type.DB.many_fields[rev_name].foreign_table.__name__}`. Set different `reverse_name`.')
+                            f'Cannot reuse Many field in table `{field.type.__name__}` with name `{rev_name}`, '
+                            f'it is associated with table `{field.type.DB.many_fields[rev_name].foreign_table.__name__}`. '
+                            f'Set different `reverse_name`.')
                     field.type.DB.many_fields[rev_name].foreign_field = name
                 else:
                     field.type.DB.many_fields[rev_name] = DBManyField(cls, name)
 
         # check Many fields connected
-        for name, field in cls.DB.many_fields.items():
-            if not field.foreign_field or field.foreign_field not in field.foreign_table.DB.fields:
+        for name, m_field in cls.DB.many_fields.items():  # type: str, DBManyField
+            if not m_field.foreign_field or m_field.foreign_field not in m_field.foreign_table.DB.fields:
                 raise QuazyFieldTypeError(
-                    f'Cannot find reference from table `{field.foreign_table.__name__}` to table `{cls.__name__}` to connect with Many field `{name}`. Add field to source table or change field type to `ManyToMany`')
+                    f'Cannot find reference from table `{m_field.foreign_table.__name__}` to table `{cls.__name__}` to '
+                    f'connect with Many field `{name}`. Add field to source table or change field type to `ManyToMany`')
 
         # check and connect ManyToMany fields
-        for name, field in cls.DB.many_to_many_fields.items():
-            if field.middle_table:
+        for name, mm_field in cls.DB.many_to_many_fields.items():  # type: str, DBManyToManyField
+            if mm_field.middle_table:
                 continue
 
             middle_table_name = "{}{}".format(cls.__qualname__, name.capitalize())
             middle_table_inner_name = "{}_{}".format(cls.DB.table, name)
-            rev_name = field.foreign_field or cls.DB.snake_name
-            if rev_name in field.foreign_table.DB.many_to_many_fields and field.foreign_table.DB.many_to_many_fields[
+            rev_name = mm_field.foreign_field or cls.DB.snake_name
+            if rev_name in mm_field.foreign_table.DB.many_to_many_fields and mm_field.foreign_table.DB.many_to_many_fields[
                 rev_name].foreign_table is not cls:
                 raise QuazyFieldNameError(
-                    f'Cannot reuse ManyToMany field in table `{field.foreign_table.__name__}` with name `{rev_name}`, it is associated with table `{field.foreign_table.DB.many_to_many_fields[rev_name].source_table.__name__}`. Set different `reverse_name`.')
+                    f'Cannot reuse ManyToMany field in table `{mm_field.foreign_table.__name__}` with name `{rev_name}`, '
+                    f'it is associated with table `{mm_field.foreign_table.DB.many_to_many_fields[rev_name].source_table.__name__}`. '
+                    f'Set different `reverse_name`.')
 
-            f1 = DBField(field.foreign_table.DB.table, indexed=True)
+            f1 = DBField(mm_field.foreign_table.DB.table, indexed=True)
             f1.prepare(f1.column)
-            f1.type = field.foreign_table
+            f1.type = mm_field.foreign_table
             f1.ref = True
             f2 = DBField(cls.DB.table, indexed=True)
             f2.prepare(f2.column)
@@ -383,10 +387,10 @@ class MetaTable(type):
 
             add_middle_table(TableClass)
 
-            field.middle_table = TableClass
-            field.foreign_field = rev_name
-            field.foreign_table.DB.many_to_many_fields[rev_name].middle_table = TableClass
-            field.foreign_table.DB.many_to_many_fields[rev_name].foreign_field = name
+            mm_field.middle_table = TableClass
+            mm_field.foreign_field = rev_name
+            mm_field.foreign_table.DB.many_to_many_fields[rev_name].middle_table = TableClass
+            mm_field.foreign_table.DB.many_to_many_fields[rev_name].foreign_field = name
 
 
 class DBTable(metaclass=MetaTable):
@@ -709,10 +713,10 @@ class DBTable(metaclass=MetaTable):
     @classmethod
     def _load_schema(cls, state: dict[str, Any]) -> type[DBTable]:
         fields = {name: DBField._load_schema(f) for name, f in state['fields'].items()}
-        TableClass: type[DBTable] = typing.cast(type[DBTable], type(state['qualname'], (DBTable,), {
+        table_class: type[DBTable] = typing.cast(type[DBTable], type(state['qualname'], (DBTable,), {
             '__qualname__': state['qualname'],
             '__module__': state['module'],
-            '__annotations__': {name: f._pre_type for name, f in fields.items()},
+            '__annotations__': {name: f.type for name, f in fields.items()},
             '_table_': state['table'],
             '_schema_': state['schema'],
             '_just_for_typing_': state.get('just_for_typing', False),
@@ -720,13 +724,13 @@ class DBTable(metaclass=MetaTable):
             '_discriminator_': state.get('discriminator'),
             **fields
         }))
-        for name, f in TableClass.DB.fields.items():
+        for name, f in table_class.DB.fields.items():
             if f.pk:
-                TableClass.DB.pk = f
+                table_class.DB.pk = f
             elif f.cid:
-                TableClass.DB.cid = f
+                table_class.DB.cid = f
 
-        return TableClass
+        return table_class
 
     @property
     def pk(self):
