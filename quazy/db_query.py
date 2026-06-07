@@ -195,7 +195,7 @@ class DBConditionField:
 class DBSQL:
     __slots__ = ['sql_text', 'query', 'aggregated']
 
-    def __new__(cls, query: DBQuery, sql: Union[str, int, DBSQL], aggregated: bool = False):
+    def __new__(cls, query: DBQuery = None, sql: Union[str, int, DBSQL] = None, aggregated: bool = False, *args, **kwargs):
         if isinstance(sql, DBSQL):
             return sql
         return super().__new__(cls)
@@ -526,13 +526,13 @@ class DBQuery(typing.Generic[DBTableT]):
             setattr(self.scheme, table.DB.snake_name, DBQueryField(self, table))
 
         if self.table_class is not None:
-            if not for_copy:
-                self.joins[self.table_class.DB.table] = DBJoin(DBJoinKind.SOURCE, self.table_class)
+            self.joins[self.table_class.DB.table] = DBJoin(DBJoinKind.SOURCE, self.table_class)
+
             table_space = DBQueryField(self, self.table_class)
             setattr(table_space, '_db', self.scheme)
             self.scheme = table_space
 
-            if not for_copy and self.table_class.DB.extendable:
+            if self.table_class.DB.extendable:
                 if self.table_class.DB.owner is None:
                     self.filters.append(
                         getattr(table_space, self.table_class.DB.cid.name) ==
@@ -545,27 +545,24 @@ class DBQuery(typing.Generic[DBTableT]):
                         self.arg(self.table_class.DB.owner.DB.discriminator)
                     )
 
-
     def _check_frozen(self):
         if self.frozen_sql is not None:
             raise QuazyFrozen
 
-    def __copy__(self):
-        obj = object.__new__(self.__class__)
-        deep_attrs = 'fields joins sort_list filters groups group_filters with_queries args'.split()
-        for k, v in self.__dict__.items():
-            if k == "name":
-                obj.name = f'q{id(obj)}'
-            elif k not in deep_attrs:
-                setattr(obj, k, v)
-            else:
-                setattr(obj, k, v.copy())
-        obj._collect_scheme(True)
-        return obj
-
     def copy(self):
         """Make a copy of a query"""
-        obj = copy.copy(self)
+        #obj = copy.copy(self)
+        obj = object.__new__(self.__class__)
+        memo = {
+            id(self): obj,
+            id(self.db): self.db,
+            id(self.table_class): self.table_class,
+        }
+        for k, v in vars(self).items():
+            if k == "name":
+                obj.name = f'q{id(obj)}'
+            else:
+                setattr(obj, k, copy.deepcopy(v, memo))
         return obj
 
     def __enter__(self) -> DBQuery:
