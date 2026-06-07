@@ -127,23 +127,25 @@ class MigrationDifference(NamedTuple):
     """Tuple of commands and tables.
 
     Attributes:
+        schema: schema name
         commands: list of commands
         tables: list of tables
         migration_index: migration index when reverted or None when new migration is created
     """
+    schema: str
     commands: list[MigrationCommand]
     tables: list[type[DBTable]]
     migration_index: str | None = None
 
     def info(self) -> str:
         """Get textual information about the migration difference."""
-        result = ''
+        result = f'Migration schema: {self.schema}\n'
         if self.migration_index is not None:
             result += f'Migration index: {self.migration_index}\n'
         if not self.commands:
             return result + "No changes"
         result += 'Commands:\n'
-        result += '\n'.join(str(command) for command in self.commands)
+        result += '\t' + '\n\t'.join(str(command) for command in self.commands)
         return result
 
 def check_migrations(db: DBFactory) -> bool:
@@ -201,7 +203,7 @@ def compare_schema(db: DBFactory, rename_list: list[tuple[str, str]] | None = No
         .fetch_one()
 
     if not last_migration:
-        return MigrationDifference([MigrationCommand(MigrationType.INITIAL, (None, ))], db.all_tables(schema))
+        return MigrationDifference(schema, [MigrationCommand(MigrationType.INITIAL, (None, ))], db.all_tables(schema))
 
     if migration_index == last_migration.index:
         raise QuazyError(f'Migration index `{migration_index}` already applied')
@@ -210,8 +212,8 @@ def compare_schema(db: DBFactory, rename_list: list[tuple[str, str]] | None = No
         tables: dict[str, type[DBTable]] = {}
         data = json.loads(tables_data)
         for chunk in data:
-            SomeTable: type[DBTable] = DBTable._load_schema(chunk)
-            tables |= {SomeTable.__qualname__: SomeTable}
+            some_table: type[DBTable] = DBTable._load_schema(chunk)
+            tables |= {some_table.__qualname__: some_table}
 
         globalns = tables.copy()
         for t in list(tables.values()):
@@ -243,7 +245,7 @@ def compare_schema(db: DBFactory, rename_list: list[tuple[str, str]] | None = No
             if f.ref and f.type.DB.schema != schema:
                 fields = {fname: field for fname, field in f.type.DB.fields.items() if field.pk or field.cid}
                 annotations = {fname: annot for fname, annot in f.type.__annotations__.items() if fname in fields}
-                ShortClass = typing.cast(type[DBTable], type(f.type.__qualname__, (DBTable, ), {
+                short_class = typing.cast(type[DBTable], type(f.type.__qualname__, (DBTable, ), {
                     '__qualname__': f.type.__qualname__,
                     '__module__': f.type.__module__,
                     '__annotations__': annotations,
@@ -255,7 +257,7 @@ def compare_schema(db: DBFactory, rename_list: list[tuple[str, str]] | None = No
                     '_just_for_typing_': True,
                     **fields
                 }))
-                all_tables.append(ShortClass)
+                all_tables.append(short_class)
 
     tables_new = {t.__qualname__: t for t in all_tables}
 
@@ -334,17 +336,16 @@ def compare_schema(db: DBFactory, rename_list: list[tuple[str, str]] | None = No
             if field_old.type.__name__ != field_new.type.__name__:
                 commands.append(MigrationCommand(MigrationType.ALTER_FIELD_TYPE, (table_new, field_new, field_old.type.__name__, field_new.type.__name__)))
 
-    return MigrationDifference(commands, db.all_tables(schema), migration_index)
+    return MigrationDifference(schema, commands, db.all_tables(schema), migration_index)
 
 
-def apply_changes(db: DBFactory, diff: MigrationDifference, comments: str = "", schema: str = 'public'):
+def apply_changes(db: DBFactory, diff: MigrationDifference, comments: str = ""):
     """Apply changes from the specified migration difference.
 
     Arguments:
         db: database factory
         diff: migration difference
         comments: optional comments for the migration (human-readable)
-        schema: schema name (public by default)
     """
 
     if not diff.commands:
@@ -355,40 +356,43 @@ def apply_changes(db: DBFactory, diff: MigrationDifference, comments: str = "", 
         json_tables = json.dumps(saved_tables, indent=4)
         saved_commands = [c.save() for c in diff.commands]
         json_commands = json.dumps(saved_commands, indent=4)
-        migration = Migration(schema=schema, index=index, tables=json_tables, commands=json_commands, comments=comments)
+        migration = Migration(schema=diff.schema, index=index, tables=json_tables, commands=json_commands, comments=comments)
         db.insert(migration)
 
     if len(diff.commands) == 1 and diff.commands[0].command == MigrationType.INITIAL:
         print("Apply initial migration... ", end='')
-        db.create(schema)
+        db.create(diff.schema)
         save_migration('0001')
         print('Done')
         return
 
     trans = db._translator
     with db.connection() as conn:
+        late_fields: list[type[DBField]] = []
+        print("First pass...")
         for command in diff.commands:
-            print(f"Apply command: {command}... ", end='')
+            print(f"\t{command}... ", end='')
+            result = "Done"
             match command.command:
                 case MigrationType.ADD_TABLE:
-                    conn.execute(trans.create_table(command.arguments[0]))
-                    for field in command.arguments[0].DB.fields.values():
-                        if field.ref:
-                            conn.execute(trans.add_reference(command.arguments[0], field))
+                    table: type[DBTable] = command.arguments[0]
+                    if table.DB.schema:
+                        if not trans.supports_schema:
+                            raise QuazyNotSupported
+                        conn.execute(trans.create_schema(table.DB.schema))
+
+                    conn.execute(trans.create_table(table))
+                    late_fields.append(table)
 
                 case MigrationType.DELETE_TABLE:
-                    for field in command.arguments[0].DB.fields.values():
+                    table = command.arguments[0]
+                    for field in table.DB.fields.values():
                         if field.ref:
-                            conn.execute(trans.drop_reference(command.arguments[0], field))
-                    conn.execute(trans.drop_table(command.arguments[0]))
+                            conn.execute(trans.drop_reference(table, field))
+                    conn.execute(trans.drop_table(table))
 
                 case MigrationType.RENAME_TABLE:
                     conn.execute(trans.rename_table(*command.arguments))
-
-                case MigrationType.ADD_FIELD:
-                    conn.execute(trans.add_field(*command.arguments))
-                    if command.arguments[1].ref:
-                        conn.execute(trans.add_reference(*command.arguments))
 
                 case MigrationType.DELETE_FIELD:
                     if command.arguments[1].ref:
@@ -397,9 +401,6 @@ def apply_changes(db: DBFactory, diff: MigrationDifference, comments: str = "", 
 
                 case MigrationType.RENAME_FIELD:
                     conn.execute(trans.rename_field(*command.arguments))
-
-                case MigrationType.ALTER_FIELD_TYPE:
-                    conn.execute(trans.alter_field_type(command.arguments[0], command.arguments[1]))
 
                 case MigrationType.ALTER_FIELD_FLAG:
                     table, field, flag, value = command.arguments
@@ -431,12 +432,39 @@ def apply_changes(db: DBFactory, diff: MigrationDifference, comments: str = "", 
                                 conn.execute(trans.drop_index(table, field))
                         case 'default_sql':
                             conn.execute(trans.set_default_value(table, field, value))
-            print("Done")
+                case _:
+                    result = "Skipped"
+            print(result)
+
+        if late_fields:
+            print("Late fields creation...")
+            for table in late_fields:
+                print(f"\t{table.DB.title}...", end='')
+                for field in table.DB.fields.values():
+                    if field.ref:
+                        conn.execute(trans.add_reference(table, field))
+                print("Done")
+
+        print("Second pass...")
+        for command in diff.commands:
+            print(f"\t{command}... ", end='')
+            result = "Done"
+            match command.command:
+                case MigrationType.ADD_FIELD:
+                    conn.execute(trans.add_field(*command.arguments))
+                    if command.arguments[1].ref:
+                        conn.execute(trans.add_reference(*command.arguments))
+
+                case MigrationType.ALTER_FIELD_TYPE:
+                    conn.execute(trans.alter_field_type(command.arguments[0], command.arguments[1]))
+                case _:
+                    result = "Skipped"
+            print(result)
 
     # set migration statuses
     last_mig = db.get(Migration, active=True)
     if diff.migration_index is None:
-        max_index = db.query(Migration).filter(lambda x: x.schema == schema).fetch_max(lambda x: x.index.as_integer)
+        max_index = db.query(Migration).filter(lambda x: x.schema == diff.schema).fetch_max(lambda x: x.index.as_integer)
         next_index = f'{max_index+1:04d}'
         save_migration(next_index)
         if last_mig:
@@ -473,7 +501,10 @@ def apply_changes(db: DBFactory, diff: MigrationDifference, comments: str = "", 
 def dump_changes(db: DBFactory, schema: str, directory: str):
     """Dump changes for the specified schema to the specified directory in YAML format."""
 
-    import yaml
+    try:
+        import yaml
+    except ImportError:
+        return
 
     migrations = db.query(Migration).chained("index", "next_index", "0001").filter(schema=schema)
 

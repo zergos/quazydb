@@ -200,6 +200,13 @@ class DBFactory:
         """Close the database connection and release all resources"""
         self._connection_pool.close()
 
+    def _bind_subtables(self, cls: type[DBTable]):
+        for subtab in cls.DB.subtables.values():
+            subtab.DB.db = self
+            subtab.DB.source_schema = cls.DB.source_schema
+            if not subtab.DB.schema:
+                subtab.DB.schema = cls.DB.schema
+
     def bind(self, cls: type[DBTable], schema: str = 'public'):
         """Bind a specific table to the factory instance
 
@@ -210,13 +217,11 @@ class DBFactory:
         if cls.__qualname__ in self._tables:
             return
         cls.DB.db = self
+        cls.DB.source_schema = schema
         if not cls.DB.schema:
             cls.DB.schema = schema
 
-        for subtab in cls.DB.subtables.values():
-            subtab.DB.db = self
-            if not subtab.DB.schema:
-                subtab.DB.schema = schema
+        self._bind_subtables(cls)
 
         self._tables[cls.__qualname__] = cls
 
@@ -245,6 +250,8 @@ class DBFactory:
         for table in tables:
             table.resolve_types(globalns)
         for table in tables:
+            self._bind_subtables(table)
+        for table in tables:
             table.resolve_types_many(lambda t: self.bind(t, schema))
         for table in tables:
             table.setup_validators()
@@ -259,7 +266,7 @@ class DBFactory:
             self._tables.clear()
         else:
             for name, table in list(self._tables.items()):
-                if table.DB.schema == schema:
+                if table.DB.source_schema == schema:
                     del self._tables[name]
 
     def __contains__(self, item: str | DBTable) -> bool:
@@ -359,12 +366,8 @@ class DBFactory:
         for table in self._tables.values():
             all_tables.extend(table.DB.subtables.values())
 
-        ext: dict[str, list[type[DBTable]]] = defaultdict(list)
         for t in all_tables.copy():
-            if t.DB.extendable and not for_stub:
-                ext[t.DB.table].append(t)
-                all_tables.remove(t)
-            elif schema and t.DB.schema != schema:
+            if schema and t.DB.source_schema != schema:
                 all_tables.remove(t)
 
         if for_stub:
@@ -377,47 +380,6 @@ class DBFactory:
 
             for t in all_tables.copy():
                 add_bases(t)
-
-        if schema:
-            for tname, tables in ext.copy().items():
-                if not any(t.DB.schema == schema for t in tables):
-                    del ext[tname]
-
-        for tables in ext.values():
-            fields = {}
-            annotations = {}
-            field_sources = {}
-            root_class: type[DBTable] | None = None
-            for t in tables:
-                if t.DB.is_root:
-                    root_class = t
-
-                for fname, field in t.DB.fields.items():
-                    if src := field_sources.get(fname):
-                        if field.type != fields[fname].type and not issubclass(t, src) and not issubclass(src, t):
-                            raise QuazyFieldNameError(f'Same column `{field.name}` in different branches has different type')
-                    else:
-                        fields[fname] = field
-                        field_sources[fname] = t
-                    if fname in t.__annotations__:
-                        annotations[fname] = t.__annotations__[fname]
-
-            for fname, f in fields.items():
-                if fname not in annotations:
-                    annotations[fname] = f.type
-
-            TableClass: type[DBTable] = typing.cast(type[DBTable], type(root_class.__qualname__+"Combined", (DBTable, ), {
-                '__qualname__': root_class.__qualname__+"Combined",
-                '__module__': root_class.__module__,
-                '__annotations__': annotations,
-                '__annotate_func__': lambda f: annotations,
-                '_db_': self,
-                '_table_': root_class.DB.table,
-                '_schema_': root_class.DB.schema,
-                '_extendable_': True,
-                **fields
-            }))
-            all_tables.append(TableClass)
 
         return all_tables
 
@@ -433,7 +395,7 @@ class DBFactory:
             created_tables = created_tables_query.fetchall()
 
         for table in all_tables.copy():
-            if (table.DB.schema, table.DB.table) in created_tables or schema and table.DB.schema != schema:
+            if (table.DB.source_schema, table.DB.table) in created_tables:
                 all_tables.remove(table)
 
         return all_tables
@@ -471,17 +433,25 @@ class DBFactory:
 
             # create tables
             for table in all_tables:
-                curr.execute(self._translator.create_table(table))
+                if not table.DB.extendable or table.DB.is_root:
+                    curr.execute(self._translator.create_table(table))
+                else:
+                    for field_name in table.DB.self_fields:
+                        curr.execute(self._translator.add_field(table, table.DB.fields[field_name]))
 
             # create foreign keys
             for table in all_tables:
-                for field in table.DB.fields.values():
+                for field_name, field in table.DB.fields.items():
+                    if table.DB.extendable and field_name not in table.DB.self_fields:
+                        continue
                     if field.ref and not field.property:
                         curr.execute(self._translator.add_reference(table, field))
 
             # create indices
             for table in all_tables:
-                for field in table.DB.fields.values():
+                for field_name, field in table.DB.fields.items():
+                    if table.DB.extendable and field_name not in table.DB.self_fields:
+                        continue
                     if field.indexed:
                         curr.execute(self._translator.create_index(table, field))
 

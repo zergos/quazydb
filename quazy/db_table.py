@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import typing
+from typing import ClassVar
 import types
 import re
 import sys
@@ -60,6 +61,10 @@ class MetaTable(type):
             src_name = f'_{name}_'
             if (value := attrs.pop(src_name, None)) is not None:
                 spec_attrs[name] = value
+                if name == 'schema':
+                    spec_attrs['source_schema'] = value
+                elif name == 'table':
+                    spec_attrs['source_table'] = value
 
         if 'title' not in spec_attrs:
             spec_attrs['title'] = clsname
@@ -68,6 +73,7 @@ class MetaTable(type):
             raise QuazyError('`validate` attribute is set to `True`, but `pydantic` is not installed')
 
         DB = typing.cast(type[DBTable.DB], type(clsname + 'DB', (cls.db_base_class,), spec_attrs))
+        DB.self_fields = list()
         DB.many_fields = dict()
         DB.many_to_many_fields = dict()
         DB.defaults = dict()
@@ -76,11 +82,12 @@ class MetaTable(type):
         if DB.use_slots:
             attrs['__slots__'] = []
 
-        MetaTable.collect_fields(bases, DB, attrs)
-
         qualname = attrs['__qualname__']
         if not DB.table:
-            DB.table = camel2snake(qualname.replace('.', ''))
+            DB.source_table = camel2snake(qualname.replace('.', ''))
+            DB.table = DB.source_table
+
+        MetaTable.collect_fields(bases, DB, attrs)
 
         if '.' in qualname:
             # save owner class name
@@ -134,6 +141,7 @@ class MetaTable(type):
             if (isinstance(t, typing._GenericAlias) and t.__name__ == "ClassVar"
                 or isinstance(t, str) and get_annotated_id(t) == "ClassVar"):
                 continue
+            DB.self_fields.append(name)
             if DB.use_slots:
                 attrs['__slots__'].append(name)
             if (isinstance(t, typing._AnnotatedAlias) and t.__metadata__[0] == 'ObjVar'
@@ -147,7 +155,8 @@ class MetaTable(type):
             else:
                 field = attrs.pop(name, DBField())
             if isinstance(field, DBField):
-                field.prepare(name)
+                if DB.extendable and not DB.is_root:
+                    field.column = f'{DB.source_table}_{field.column or name}'
                 if not DB.use_slots:
                     attrs[name] = field.default
                 if field.default is not Unassigned:
@@ -173,6 +182,8 @@ class MetaTable(type):
 
                     field.body = True
                     DB.body = field
+
+                field.prepare(name)
             else:
                 field = DBField(default=field)
                 field.prepare(name)
@@ -404,17 +415,17 @@ class DBTable(metaclass=MetaTable):
         attribute named `pk` is reserved as property for direct primary key access
     """
     # initial attributes
-    _table_: typing.ClassVar[str]  #: database table internal name
-    _title_: typing.ClassVar[str]  #: user-friendly table name
-    _schema_: typing.ClassVar[str]  #: explicit schema name
-    _just_for_typing_: typing.ClassVar[bool]  #: internal flag used for migrations
-    _extendable_: typing.ClassVar[bool]  #:  set :ref:`extendable <extendable>` flag for a table
-    _discriminator_: typing.ClassVar[typing.Any]  #: SQL safe CID value to specify table in extended mode
-    _meta_: typing.ClassVar[bool]  #: table marked as :ref:`meta table <meta tables>`
-    _lookup_field_: typing.ClassVar[str]  #: specify field name for text search. For integrations only.
-    _use_slots_: typing.ClassVar[bool]  #: use slots for database fields (enabled by default)
-    _validate_: typing.ClassVar[bool]  #: validate fields types using :mod:`pydantic` (default: True if `pydantic` is installed)
-    _metadata_: typing.ClassVar[dict[str, typing.Any]]  #: any custom metadata
+    _table_: ClassVar[str]  #: database table internal name
+    _title_: ClassVar[str]  #: user-friendly table name
+    _schema_: ClassVar[str]  #: explicit schema name
+    _just_for_typing_: ClassVar[bool]  #: internal flag used for migrations
+    _extendable_: ClassVar[bool]  #:  set :ref:`extendable <extendable>` flag for a table
+    _discriminator_: ClassVar[typing.Any]  #: SQL safe CID value to specify table in extended mode
+    _meta_: ClassVar[bool]  #: table marked as :ref:`meta table <meta tables>`
+    _lookup_field_: ClassVar[str]  #: specify field name for text search. For integrations only.
+    _use_slots_: ClassVar[bool]  #: use slots for database fields (enabled by default)
+    _validate_: ClassVar[bool]  #: validate fields types using :mod:`pydantic` (default: True if `pydantic` is installed)
+    _metadata_: ClassVar[dict[str, typing.Any]]  #: any custom metadata
 
     # state attributes
     __slots__ = ('_db_', '_modified_fields_')
@@ -426,30 +437,33 @@ class DBTable(metaclass=MetaTable):
 
         It has only class-based attributes, intended for read-only. Instances aren't supported.
         """
-        db: typing.ClassVar[DBFactory] = None  #: :class:`DBFactory` linked to a table, if already specified
-        table: typing.ClassVar[str | None] = None  #: database table internal name
-        title: typing.ClassVar[str | None] = None  #: user-friendly table name
-        schema: typing.ClassVar[str | None] = None  #: explicit schema name
-        just_for_typing: typing.ClassVar[bool] = False  #: internal flag used for migrations
-        snake_name: typing.ClassVar[str]  #: internal flag used for migrations
-        extendable: typing.ClassVar[bool] = False  #: support for :ref:`extendable <extendable>` classes
-        cid: typing.ClassVar[DBField | None] = None  #: CID field reference (if declared)
-        is_root: typing.ClassVar[bool] = False  #: is table a root of extendable tables chain
-        discriminator: typing.ClassVar[typing.Any | None] = None  #: derived table inner code
-        owner: typing.ClassVar[typing.Union[str, type[DBTable]] | None] = None  #: table owner of subtable
-        subtables: typing.ClassVar[dict[str, type[DBTable]] | None] = None  #: subtables list
-        meta: typing.ClassVar[bool] = False  #: table marked as :ref:`meta table <meta tables>`
-        pk: typing.ClassVar[DBField]  #: reference to primary field :class:`DBField`
-        body: typing.ClassVar[DBField | None] = None  #: reference to :ref:`body field <properties>` or None
-        many_fields: typing.ClassVar[dict[str, DBManyField] | None] = None  #: dict of field sets, when this table is referred from another table
-        many_to_many_fields: typing.ClassVar[dict[str, DBManyToManyField] | None] = None  #: dict of field sets, when two tables referred to each other
-        fields: typing.ClassVar[dict[str, DBField]]  #: all fields dict
-        defaults: typing.ClassVar[dict[str, typing.Any]]  #: default values for fields
-        lookup_field: typing.ClassVar[str | None] = None  #: field name for text search for integrations
-        use_slots: typing.ClassVar[bool] = False  #: use slots for database fields
-        validate: typing.ClassVar[bool] = VALIDATE_DATA  #: validate fields types using :mod:`pydantic`
-        validators: typing.ClassVar[dict[str, TypeAdapter[Any]]]  #: dict of validators for fields
-        metadata: typing.ClassVar[dict[str, typing.Any]]  #: any custom metadata
+        db: ClassVar[DBFactory] = None  #: :class:`DBFactory` linked to a table, if already specified
+        table: ClassVar[str | None] = None  #: database table name
+        source_table: ClassVar[str | None] = None #: user defined database table name
+        title: ClassVar[str | None] = None  #: user-friendly table name
+        schema: ClassVar[str | None] = None  #: database schema name
+        source_schema: ClassVar[str | None] = None  #: user-defined schema name
+        just_for_typing: ClassVar[bool] = False  #: internal flag used for migrations
+        snake_name: ClassVar[str]  #: internal flag used for migrations
+        extendable: ClassVar[bool] = False  #: support for :ref:`extendable <extendable>` classes
+        cid: ClassVar[DBField | None] = None  #: CID field reference (if declared)
+        is_root: ClassVar[bool] = False  #: is table a root of extendable tables chain
+        discriminator: ClassVar[typing.Any | None] = None  #: derived table inner code
+        owner: ClassVar[typing.Union[str, type[DBTable]] | None] = None  #: table owner of subtable
+        subtables: ClassVar[dict[str, type[DBTable]] | None] = None  #: subtables list
+        meta: ClassVar[bool] = False  #: table marked as :ref:`meta table <meta tables>`
+        pk: ClassVar[DBField]  #: reference to primary field :class:`DBField`
+        body: ClassVar[DBField | None] = None  #: reference to :ref:`body field <properties>` or None
+        many_fields: ClassVar[dict[str, DBManyField] | None] = None  #: dict of field sets, when this table is referred from another table
+        many_to_many_fields: ClassVar[dict[str, DBManyToManyField] | None] = None  #: dict of field sets, when two tables referred to each other
+        fields: ClassVar[dict[str, DBField]]  #: all fields dict
+        self_fields: ClassVar[list[str] | None]  #: field names, declared in this class only
+        defaults: ClassVar[dict[str, typing.Any]]  #: default values for fields
+        lookup_field: ClassVar[str | None] = None  #: field name for text search for integrations
+        use_slots: ClassVar[bool] = False  #: use slots for database fields
+        validate: ClassVar[bool] = VALIDATE_DATA  #: validate fields types using :mod:`pydantic`
+        validators: ClassVar[dict[str, TypeAdapter[Any]]]  #: dict of validators for fields
+        metadata: ClassVar[dict[str, typing.Any]]  #: any custom metadata
 
     class ItemGetter(typing.Generic[DBTableT]):
         def __init__(self, db: DBFactory | DBFactoryAsync, table: type[DBTableT], field_name: str, pk_value: Any, view: str = None):
@@ -704,6 +718,7 @@ class DBTable(metaclass=MetaTable):
             'table': cls.DB.table,
             'schema': cls.DB.schema,
             'fields': {name: f._dump_schema() for name, f in cls.DB.fields.items()},
+            'self_fields': cls.DB.self_fields if cls.DB.extendable else list(cls.DB.fields),
         }
         for col in 'extendable discriminator just_for_typing'.split():
             if val := getattr(cls.DB, col):
@@ -713,10 +728,11 @@ class DBTable(metaclass=MetaTable):
     @classmethod
     def _load_schema(cls, state: dict[str, Any]) -> type[DBTable]:
         fields = {name: DBField._load_schema(f) for name, f in state['fields'].items()}
+        self_fields = state['self_fields']
         table_class: type[DBTable] = typing.cast(type[DBTable], type(state['qualname'], (DBTable,), {
             '__qualname__': state['qualname'],
             '__module__': state['module'],
-            '__annotations__': {name: f.type for name, f in fields.items()},
+            '__annotations__': {name: f.type for name, f in fields.items() if name in self_fields},
             '_table_': state['table'],
             '_schema_': state['schema'],
             '_just_for_typing_': state.get('just_for_typing', False),

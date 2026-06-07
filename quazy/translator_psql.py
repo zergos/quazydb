@@ -178,7 +178,7 @@ class TranslatorPSQL(Translator):
     @classmethod
     def add_field(cls, table: type[DBTable], field: DBField) -> str:
         col = f'"{field.column}" {cls.type_name(field)} {cls.column_options(field, table)}'
-        res = f'ALTER TABLE {cls.table_name(table)} ADD COLUMN {col}'
+        res = f'ALTER TABLE {cls.table_name(table)} ADD COLUMN IF NOT EXISTS {col}'
         return res
 
     @classmethod
@@ -216,7 +216,7 @@ class TranslatorPSQL(Translator):
     def drop_reference(cls, table: type[DBTable], field: DBField) -> str:
         if not field.ref:
             raise QuazyTranslatorException(f'Field {field.name} is not reference')
-        res = f'ALTER TABLE {cls.table_name(table)} DROP CONSTRAINT fk_{table.DB.table}_{field.column}'
+        res = f'ALTER TABLE {cls.table_name(table)} DROP CONSTRAINT IF EXISTS fk_{table.DB.table}_{field.column}'
         return res
 
     @classmethod
