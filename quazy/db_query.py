@@ -423,6 +423,9 @@ class DBSQL:
         else:
             return self.func3('substr', pos, length)
 
+    def coalesce(self, value) -> DBSQL:
+        return self.func2('coalesce', value)
+
     @property
     def min(self):
         return self.aggregate('min')
@@ -879,7 +882,7 @@ class DBQuery(typing.Generic[DBTableT]):
                 self.group_filters.append(sql)
             else:
                 self.filters.append(sql)
-        if self.table_class in None:
+        if self.table_class is None:
             raise QuazyError('Query is not associated with table, cat not filter by field names')
         for k, v in kwargs.items():
             self.filters.append(getattr(self.scheme, k) != v)  # noqa

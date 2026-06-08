@@ -4,9 +4,11 @@ This module represents one class `DBFactory` as a start point to any connection 
 """
 from __future__ import annotations
 
+import asyncio
+import copy
 import sys
 import inspect
-import copy
+from collections import defaultdict
 from contextlib import contextmanager, asynccontextmanager, nullcontext
 
 from psycopg import AsyncConnection

@@ -65,7 +65,7 @@ class MigrationCommand(NamedTuple):
     def __str__(self):
         match self.command:
             case MigrationType.INITIAL:
-                return f"Initial migration"
+                return f"Initial migration ({self.arguments[0]} tables)"
             case MigrationType.ADD_TABLE:
                 return f"Add table `{self.arguments[0].__qualname__}`"
             case MigrationType.DELETE_TABLE:
@@ -101,6 +101,8 @@ class MigrationCommand(NamedTuple):
                     add_arg('str', arg)
                 elif type(arg) is bool:
                     add_arg('bool', str(arg))
+                elif type(arg) is int:
+                    add_arg('int', arg)
                 elif arg is None:
                     pass
                 else:
@@ -115,7 +117,7 @@ class MigrationCommand(NamedTuple):
                 args.append(tables[arg['value']])
             elif arg['type'] == 'DBField':
                 args.append(args[0].DB.fields[arg['value']])
-            elif arg['type'] == 'str':
+            elif arg['type'] in ('str', 'int'):
                 args.append(arg['value'])
             elif arg['type'] == 'bool':
                 args.append(arg['value'] == 'True')
@@ -200,7 +202,13 @@ def compare_schema(db: DBFactory, rename_list: list[tuple[str, str]] | None = No
     last_migration = db.get(Migration, schema=schema, active=True)
 
     if not last_migration:
-        return MigrationDifference(schema, [MigrationCommand(MigrationType.INITIAL, (None, ))], db.all_tables(schema))
+        all_tables = db.all_tables(schema)
+        if not all_tables:
+            return MigrationDifference(schema, [], all_tables)
+        else:
+            return MigrationDifference(schema,
+                                       [MigrationCommand(MigrationType.INITIAL, (len(all_tables), ))],
+                                       all_tables)
 
     if migration_index == last_migration.index:
         raise QuazyError(f'Migration index `{migration_index}` already applied')
