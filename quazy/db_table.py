@@ -128,7 +128,7 @@ class MetaTable(type):
 
         fields = MetaTable.collect_bases_fields(bases, DB)
 
-        has_pk = False
+        has_pk = DB.pk is not None
         if sys.version_info < (3, 14):
             annotations = attrs.get('__annotations__', {})
         else:
@@ -197,7 +197,7 @@ class MetaTable(type):
             raise QuazyFieldTypeError(
                 f'CID field is declared, but table `{attrs["__qualname__"]}` is not declared with `_extendable_` attribute')
 
-        if not has_pk:
+        if not has_pk and not DB.meta:
             pk = DBField(pk=True)
             pk.type = int
             pk.prepare('id')
@@ -227,6 +227,9 @@ class MetaTable(type):
                     DB.table = base.DB.table
                     DB.schema = base.DB.schema
                     DB.body = base.DB.body
+
+                elif base.DB.pk is not None:
+                    DB.pk = base.DB.pk
 
         return fields
 
@@ -334,6 +337,9 @@ class MetaTable(type):
         """Resolve referred types from annotations
 
         :meta private:"""
+        if cls.DB.meta:
+            return
+
         # eval refs
         for name, field in cls.DB.fields.items():  # type: str, DBField
             if field.ref:
@@ -452,7 +458,7 @@ class DBTable(metaclass=MetaTable):
         owner: ClassVar[typing.Union[str, type[DBTable]] | None] = None  #: table owner of subtable
         subtables: ClassVar[dict[str, type[DBTable]] | None] = None  #: subtables list
         meta: ClassVar[bool] = False  #: table marked as :ref:`meta table <meta tables>`
-        pk: ClassVar[DBField]  #: reference to primary field :class:`DBField`
+        pk: ClassVar[DBField | None] = None  #: reference to primary field :class:`DBField`
         body: ClassVar[DBField | None] = None  #: reference to :ref:`body field <properties>` or None
         many_fields: ClassVar[dict[str, DBManyField] | None] = None  #: dict of field sets, when this table is referred from another table
         many_to_many_fields: ClassVar[dict[str, DBManyToManyField] | None] = None  #: dict of field sets, when two tables referred to each other
