@@ -197,10 +197,7 @@ def compare_schema(db: DBFactory, rename_list: list[tuple[str, str]] | None = No
     commands: list[MigrationCommand] = []
 
     # check last migration
-    last_migration = db.query(Migration)\
-        .select('index', 'tables')\
-        .filter(schema=schema, active=True)\
-        .fetch_one()
+    last_migration = db.get(Migration, schema=schema, active=True)
 
     if not last_migration:
         return MigrationDifference(schema, [MigrationCommand(MigrationType.INITIAL, (None, ))], db.all_tables(schema))
@@ -230,11 +227,18 @@ def compare_schema(db: DBFactory, rename_list: list[tuple[str, str]] | None = No
         all_tables = db.all_tables(schema)
     else:
         # check migration index is within actual branch
-        actual_branch = db.query(Migration).select("index").chained("index", "next_index", "0001").fetch_list()
+        actual_branch = (db.query(Migration)
+                         .filter(schema=schema)
+                         .select("index")
+                         .chained("index", "next_index", "0001")
+                         .fetch_list())
         if migration_index not in actual_branch:
             raise QuazyError(f'Migration index `{migration_index}` is orphaned and can not be reverted anymore')
         # get tables from the specified migration snapshot
-        selected_migration = db.query(Migration).select("tables").where(index=migration_index).fetch_one()
+        selected_migration = (db.query(Migration)
+                              .select("tables")
+                              .where(schema=schema, index=migration_index)
+                              .fetch_one())
         if not selected_migration:
             raise QuazyError(f'No migration index `{migration_index}` found')
         all_tables = list(load_tables(selected_migration.tables).values())
@@ -242,7 +246,7 @@ def compare_schema(db: DBFactory, rename_list: list[tuple[str, str]] | None = No
     # extend by related types from other schemas
     for t in all_tables.copy():
         for f in t.DB.fields.values():
-            if f.ref and f.type.DB.schema != schema:
+            if f.ref and f.type.DB.source_schema != schema:
                 fields = {fname: field for fname, field in f.type.DB.fields.items() if field.pk or field.cid}
                 annotations = {fname: annot for fname, annot in f.type.__annotations__.items() if fname in fields}
                 short_class = typing.cast(type[DBTable], type(f.type.__qualname__, (DBTable, ), {
@@ -292,8 +296,15 @@ def compare_schema(db: DBFactory, rename_list: list[tuple[str, str]] | None = No
     for t_name, table_old in tables_old.items():
         table_new = tables_new[t_name]
 
-        fields_old = {f.column: f for f in table_old.DB.fields.values() if not f.property}
-        fields_new = {f.column: f for f in table_new.DB.fields.values() if not f.property}
+        if not table_old.DB.extendable:
+            fields_old = {f.column: f for f in table_old.DB.fields.values() if not f.property}
+        else:
+            fields_old = {f.column: f for k in table_old.DB.self_fields for f in [table_old.DB.fields[k]] if not f.property}
+
+        if not table_new.DB.extendable:
+            fields_new = {f.column: f for f in table_new.DB.fields.values() if not f.property}
+        else:
+            fields_new = {f.column: f for k in table_new.DB.self_fields for f in [table_new.DB.fields[k]] if not f.property}
         
         # 4.1. Check new fields
         fields_to_add = {f_name: f for f_name, f in fields_new.items() if f_name not in fields_old}
@@ -462,9 +473,10 @@ def apply_changes(db: DBFactory, diff: MigrationDifference, comments: str = ""):
             print(result)
 
     # set migration statuses
-    last_mig = db.get(Migration, active=True)
+    last_mig = db.get(Migration, schema=diff.schema, active=True)
     if diff.migration_index is None:
-        max_index = db.query(Migration).filter(lambda x: x.schema == diff.schema).fetch_max(lambda x: x.index.as_integer)
+        max_index = (db.query(Migration).filter(schema=diff.schema)
+                     .fetch_max(lambda x: x.index.as_integer))
         next_index = f'{max_index+1:04d}'
         save_migration(next_index)
         if last_mig:
@@ -473,7 +485,9 @@ def apply_changes(db: DBFactory, diff: MigrationDifference, comments: str = ""):
             last_mig.save()
     else:
         if int(diff.migration_index) < int(last_mig.index):
-            q = db.query(Migration).chained("index", "next_index", diff.migration_index)
+            q = (db.query(Migration)
+                 .filter(schema=diff.schema)
+                 .chained("index", "next_index", diff.migration_index))
             for x in q:
                 if x.index > diff.migration_index:
                     x.active = False
@@ -484,7 +498,9 @@ def apply_changes(db: DBFactory, diff: MigrationDifference, comments: str = ""):
                 if x.index == last_mig.index:
                     break
         else:
-            q = db.query(Migration).chained("index", "next_index", last_mig.index)
+            q = (db.query(Migration)
+                 .filter(schema=diff.schema)
+                 .chained("index", "next_index", last_mig.index))
             for x in q:
                 x.reversed = False
                 if x.index == diff.migration_index:
@@ -498,22 +514,30 @@ def apply_changes(db: DBFactory, diff: MigrationDifference, comments: str = ""):
     print("Complete")
 
 
-def dump_changes(db: DBFactory, schema: str, directory: str):
-    """Dump changes for the specified schema to the specified directory in YAML format."""
+def dump_changes(db: DBFactory, schema: str, directory: str, as_yaml: bool = False):
+    """Dump changes for the specified schema to the specified directory in JSON or YAML format."""
 
-    try:
-        import yaml
-    except ImportError:
-        return
+    if as_yaml:
+        try:
+            import yaml
+        except ImportError:
+            print("`PyYAML` not found. Install it with `pip install pyyaml`")
+            return
 
-    migrations = db.query(Migration).chained("index", "next_index", "0001").filter(schema=schema)
+    migrations = (db.query(Migration)
+                  .chained("index", "next_index", "0001")
+                  .filter(schema=schema))
 
     for migration in migrations:
         info = '-' + migration.comments[0:32].replace(' ', '-') if migration.comments else ''
-        with open(os.path.join(directory, f'{migration.index}{info}.yaml'), "wt") as f:
-            yaml.dump({
-                "comments": migration.comments,
-                "commands": json.loads(migration.commands),
-                "tables": json.loads(migration.tables),
-            }, f, sort_keys=False)
-
+        data = {
+            "comments": migration.comments,
+            "commands": json.loads(migration.commands),
+            "tables": json.loads(migration.tables),
+        }
+        if as_yaml:
+            with open(os.path.join(directory, f'{migration.index}{info}.yaml'), "wt") as f:
+                yaml.dump(data, f, sort_keys=False)
+        else:
+            with open(os.path.join(directory, f'{migration.index}{info}.json'), "wt") as f:
+                json.dump(data, f, sort_keys=False, indent=4)
