@@ -4,10 +4,9 @@ This module represents one class `DBFactory` as a start point to any connection 
 """
 from __future__ import annotations
 
-import asyncio
 import sys
 import inspect
-from collections import defaultdict
+import copy
 from contextlib import contextmanager, asynccontextmanager, nullcontext
 
 from psycopg import AsyncConnection
@@ -687,6 +686,14 @@ class DBFactory:
             has_fields = isinstance(query, DBQuery) and query.table_class is not None
             for col in cols_info:
                 if has_fields and (field := query.table_class.DB.fields.get(col[0])) is not None:
+                    res.append(field)
+                elif (has_fields and col[0].endswith("__view") 
+                      and (field := query.table_class.DB.fields.get(col[0][:-6])) is not None):
+                    field = copy.deepcopy(field)
+                    field.name += "__view"
+                    field.ux.name += "__view"
+                    field.type = str
+                    field.ref = False
                     res.append(field)
                 else:
                     field = DBField(col[0])
