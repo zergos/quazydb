@@ -425,10 +425,6 @@ UNION
         fields = []
         for field, value in query.fields.items():
             fields.append(f'{cls.sql_value(value)} AS "{field}"') if field != '*' else fields.append(cls.sql_value(value))
-            if isinstance(value, DBQueryField):
-                view = value._table._view_(value)
-                if view is not None:
-                    fields.append(f'{view} AS "{field}__view"')
         sources = []
         joins = []
         for join_name, join in query.joins.items():

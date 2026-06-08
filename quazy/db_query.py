@@ -241,6 +241,9 @@ class DBSQL:
     def postfix(self, sql_text: str) -> DBSQL:
         return self.sql(f'{self.sql_text} {sql_text}')
 
+    def grouping(self):
+        return self.sql(f'({self.sql_text})')
+
     def __getitem__(self, item):
         if item is int:
             return self.sql(f'{self.sql_text}[{item}]')
@@ -1001,7 +1004,23 @@ class DBQuery(typing.Generic[DBTableT]):
                 for field_name, field in self.table_class.DB.fields.items():
                     if not field.body:
                         self.fields[field_name] = getattr(self.scheme, field_name)
-
+                        
+        # add custom presentation for references
+        fields_list: list[str] = []
+        has_changes = False
+        for field_name, value in list(self.fields.items()):
+            fields_list.append(field_name)
+            if isinstance(value, DBQueryField):
+                field_name_view = f"{field_name}__view"
+                if field_name_view not in self.fields:
+                    view = value._table._view_(value)
+                    if view is not None:
+                        self.fields[field_name_view] = view
+                        fields_list.append(field_name_view)
+                        has_changes = True
+        if has_changes:
+            self.fields = OrderedDict((k, self.fields[k]) for k in fields_list)
+                        
     @hybrid_contextmanager
     def execute(self, as_dict: bool = False) -> AsyncGenerator[DBTableT] | Generator[DBTableT]:
         """Execute query and yields database cursor to fetch one or more result rows.
@@ -1063,7 +1082,7 @@ class DBQuery(typing.Generic[DBTableT]):
         result = next(expr_list, None)
         while (expr:=next(expr_list, None)) is not None:
             result = result | expr
-        return result
+        return result.grouping()
 
     def __getitem__(self, item: Any) -> list[DBTableT | Any] | DBSQL:
         """Get an expression for the selected field or select partially by slice"""
